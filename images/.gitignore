@@ -3,3 +3,6 @@
 *.img
 *.img.gz
 *.img.xz
+
+# QEMU working copy + cached virt kernel/initrd
+qemu/

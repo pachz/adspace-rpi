@@ -87,7 +87,77 @@ mount_msdos "$DISK_DEV" "$MOUNT_DIR" \
 log "Mounted at $MOUNT_DIR"
 
 # ── Hash the password ─────────────────────────────────────────────────────────
-HASHED=$(echo "$PI_PASSWORD" | openssl passwd -6 -stdin)
+# LibreSSL (macOS /usr/bin/openssl) does not support `passwd -6` (SHA-512 crypt).
+# Prefer OpenSSL 3 if present (Homebrew); otherwise a Python SHA-512 crypt.
+hash_password() {
+    local pw="$1" candidate hashed
+    for candidate in \
+        /opt/homebrew/opt/openssl@3/bin/openssl \
+        /opt/homebrew/bin/openssl \
+        /usr/local/opt/openssl@3/bin/openssl \
+        openssl
+    do
+        if command -v "$candidate" >/dev/null 2>&1 \
+            && hashed=$(printf '%s' "$pw" | "$candidate" passwd -6 -stdin 2>/dev/null) \
+            && [[ "$hashed" == \$6\$* ]]; then
+            printf '%s\n' "$hashed"
+            return 0
+        fi
+    done
+    python3 -c '
+import hashlib, os, sys
+ITOA64 = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+def to64(v, n):
+    r = []
+    for _ in range(n):
+        r.append(ITOA64[v & 0x3f]); v >>= 6
+    return "".join(r)
+password = sys.argv[1].encode()
+salt = "".join(ITOA64[b % 64] for b in os.urandom(16)).encode()
+rounds = 5000
+digest_b = hashlib.sha512(password + salt + password).digest()
+a = hashlib.sha512(password + salt)
+i = len(password)
+while i > 64:
+    a.update(digest_b); i -= 64
+a.update(digest_b[:i])
+i = len(password)
+while i:
+    a.update(digest_b if i & 1 else password)
+    i >>= 1
+digest_a = a.digest()
+da = hashlib.sha512()
+for _ in range(len(password)):
+    da.update(password)
+da = da.digest()
+ds = hashlib.sha512()
+for _ in range(16 + digest_a[0]):
+    ds.update(salt)
+ds = ds.digest()
+P = (da * (len(password) // 64 + 1))[:len(password)]
+S = ds[:len(salt)]
+C = digest_a
+for i in range(rounds):
+    ctx = hashlib.sha512()
+    ctx.update(P if i & 1 else C)
+    if i % 3: ctx.update(S)
+    if i % 7: ctx.update(P)
+    ctx.update(C if i & 1 else P)
+    C = ctx.digest()
+order = (
+    (0,21,42),(22,43,1),(44,2,23),(3,24,45),(25,46,4),(47,5,26),
+    (6,27,48),(28,49,7),(50,8,29),(9,30,51),(31,52,10),(53,11,32),
+    (12,33,54),(34,55,13),(56,14,35),(15,36,57),(37,58,16),(59,17,38),
+    (18,39,60),(40,61,19),(62,20,41),
+)
+out = "".join(to64((C[x] << 16) | (C[y] << 8) | C[z], 4) for x,y,z in order)
+out += to64(C[63], 2)
+print("$6$" + salt.decode() + "$" + out)
+' "$pw"
+}
+
+HASHED=$(hash_password "$PI_PASSWORD")
+[[ "$HASHED" == \$6\$* ]] || die "Failed to generate SHA-512 password hash"
 
 # ── Write cloud-init user-data ────────────────────────────────────────────────
 # Use Python to build user-data — avoids shell variable expansion mangling

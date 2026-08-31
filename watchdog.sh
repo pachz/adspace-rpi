@@ -45,7 +45,11 @@ enter_kiosk() {
 
 enter_setup() {
     log "Network lost → setup mode"
-    CPU_SERIAL=$(grep Serial /proc/cpuinfo | awk '{print $3}' | tail -c 9)
+    CPU_SERIAL=$(awk '/^Serial/{print $3; exit}' /proc/cpuinfo)
+    if [[ -z "$CPU_SERIAL" && -r /etc/machine-id ]]; then
+        CPU_SERIAL=$(tr -d '\n' < /etc/machine-id)
+    fi
+    CPU_SERIAL="${CPU_SERIAL: -8}"
     SSID="Adspace-TV-${CPU_SERIAL}"
     PASSWORD="${CPU_SERIAL}"
 

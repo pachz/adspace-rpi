@@ -8,7 +8,7 @@
 #   - Writes all scripts, systemd units, and config files
 #   - Pulls the app binary + frontend from the latest GitHub Release
 #   - Sets hostname from CPU serial
-#   - Registers with Tailscale
+#   - Registers with Tailscale (or Headscale if HEADSCALE_LOGIN_SERVER is set)
 #   - Reboots into kiosk mode
 #
 # Guarded by /etc/adspace-bootstrap-done — never runs twice.
@@ -20,16 +20,40 @@
 set -euo pipefail
 
 DONE_FLAG="/etc/adspace-bootstrap-done"
-GITHUB_REPO="awbalessa/adspace-rpi"
+GITHUB_REPO="pachz/adspace-rpi"
 TAILSCALE_OAUTH_SECRET="tskey-client-koZCgE2fK421CNTRL-WAfqtB3SRXSeqKSUgJTcWSjoD1vxFbGF"
+
+# Headscale override: if HEADSCALE_LOGIN_SERVER is set (env, or
+# /boot/firmware/adspace-tailnet.env), join that instead of Tailscale.com.
+# Leave empty for production.
+HEADSCALE_LOGIN_SERVER="${HEADSCALE_LOGIN_SERVER:-}"
+HEADSCALE_AUTH_KEY="${HEADSCALE_AUTH_KEY:-}"
+for _f in /boot/firmware/adspace-tailnet.env /boot/adspace-tailnet.env; do
+    [[ -f "$_f" ]] || continue
+    # shellcheck disable=SC1090
+    source "$_f"
+    break
+done
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 log()  { echo -e "${GREEN}[bootstrap]${NC} $*"; logger -t adspace-bootstrap "$*"; }
-warn() { echo -e "${YELLOW}[bootstrap]${NC} $*"; logger -t adspace-bootstrap "WARN: $*"; }
+warn() { echo -e "${YELLOW}[bootstrap]${NC} $*" >&2; logger -t adspace-bootstrap "WARN: $*"; }
 die()  { echo -e "${RED}[bootstrap]${NC} ERROR: $*" >&2; logger -t adspace-bootstrap "ERROR: $*"; exit 1; }
 
 [[ $EUID -eq 0 ]] || die "Must run as root"
 [[ -f "$DONE_FLAG" ]] && { log "Already bootstrapped. Exiting."; exit 0; }
+
+# Pi CPU serial is hardware-unique. QEMU/virt has none — fall back to machine-id.
+device_serial() {
+    local s
+    s=$(awk '/^Serial/{print $3; exit}' /proc/cpuinfo)
+    if [[ -z "$s" && -r /etc/machine-id ]]; then
+        warn "No Pi CPU serial; using machine-id (QEMU/virt)"
+        s=$(tr -d '\n' < /etc/machine-id)
+    fi
+    [[ -n "$s" ]] || die "Could not determine device serial"
+    printf '%s' "${s: -8}"
+}
 
 log "========================================================"
 log " AdSpace Bootstrap starting"
@@ -210,7 +234,11 @@ enter_kiosk() {
 
 enter_setup() {
     log "Network lost → setup mode"
-    CPU_SERIAL=$(grep Serial /proc/cpuinfo | awk '{print $3}' | tail -c 9)
+    CPU_SERIAL=$(awk '/^Serial/{print $3; exit}' /proc/cpuinfo)
+    if [[ -z "$CPU_SERIAL" && -r /etc/machine-id ]]; then
+        CPU_SERIAL=$(tr -d '\n' < /etc/machine-id)
+    fi
+    CPU_SERIAL="${CPU_SERIAL: -8}"
     SSID="Adspace-TV-${CPU_SERIAL}"
     PASSWORD="${CPU_SERIAL}"
 
@@ -498,82 +526,152 @@ done
 
 # ── 12. Hostname from CPU serial ──────────────────────────────────────────────
 log "Setting hostname..."
-CPU_SERIAL=$(grep Serial /proc/cpuinfo | awk '{print $3}')
-NEW_HOSTNAME="adspace-${CPU_SERIAL: -8}"
+CPU_SERIAL=$(device_serial)
+NEW_HOSTNAME="adspace-${CPU_SERIAL}"
+[[ "$NEW_HOSTNAME" =~ ^adspace-[0-9a-fA-F]+$ ]] \
+    || die "Invalid hostname derived from serial: $(printf %q "$NEW_HOSTNAME")"
 echo "$NEW_HOSTNAME" > /etc/hostname
-hostnamectl set-hostname "$NEW_HOSTNAME"
+hostnamectl set-hostname "$NEW_HOSTNAME" || hostname "$NEW_HOSTNAME"
 sed -i "s/127\.0\.1\.1\s.*$/127.0.1.1\t$NEW_HOSTNAME/" /etc/hosts 2>/dev/null || true
 grep -q '127.0.1.1' /etc/hosts || echo -e "127.0.1.1\t$NEW_HOSTNAME" >> /etc/hosts
 log "Hostname: $NEW_HOSTNAME"
 
-# ── 13. WiFi country + rfkill ─────────────────────────────────────────────────
-log "Setting WiFi country (AE)..."
-raspi-config nonint do_wifi_country AE
-/sbin/rfkill unblock wifi || true
+# ── 13–14. WiFi country + hotspot (skip when no radio, e.g. QEMU) ─────────────
+if [[ -e /sys/class/net/wlan0 ]]; then
+    log "Setting WiFi country (AE)..."
+    raspi-config nonint do_wifi_country AE
+    /sbin/rfkill unblock wifi || true
 
-# ── 14. Hotspot nmcli profile ─────────────────────────────────────────────────
-log "Creating hotspot nmcli profile..."
-nmcli con delete adspace-hotspot 2>/dev/null || true
-nmcli con add \
-    type wifi \
-    ifname wlan0 \
-    con-name adspace-hotspot \
-    autoconnect no \
-    ssid "Adspace-TV-setup" \
-    -- \
-    wifi.mode ap \
-    wifi.band bg \
-    wifi.channel 6 \
-    wifi-sec.key-mgmt wpa-psk \
-    wifi-sec.psk "setupsetup" \
-    ipv4.method shared \
-    ipv4.addresses 192.168.4.1/24 \
-    ipv6.method disabled
+    log "Creating hotspot nmcli profile..."
+    nmcli con delete adspace-hotspot 2>/dev/null || true
+    nmcli con add \
+        type wifi \
+        ifname wlan0 \
+        con-name adspace-hotspot \
+        autoconnect no \
+        ssid "Adspace-TV-setup" \
+        -- \
+        wifi.mode ap \
+        wifi.band bg \
+        wifi.channel 6 \
+        wifi-sec.key-mgmt wpa-psk \
+        wifi-sec.psk "setupsetup" \
+        ipv4.method shared \
+        ipv4.addresses 192.168.4.1/24 \
+        ipv6.method disabled
+else
+    warn "No wlan0 — skipping WiFi country and hotspot"
+fi
 
-# ── 15. Tailscale ─────────────────────────────────────────────────────────────
-log "Installing and registering Tailscale..."
+# ── 15. Tailscale / Headscale ─────────────────────────────────────────────────
 if ! command -v tailscale &>/dev/null; then
+    log "Installing Tailscale client..."
     curl -fsSL https://tailscale.com/install.sh | sh
 fi
+
+# Stop the package's first start — on QEMU it crash-loops (no kernel
+# modules for TUN/nftables) until we switch to userspace networking.
+systemctl stop tailscaled 2>/dev/null || true
+
+if systemd-detect-virt -q 2>/dev/null || ! grep -q '^Serial' /proc/cpuinfo; then
+    warn "Virtualized/no Pi serial: Tailscale userspace networking (no TUN/nft)"
+    mkdir -p /etc/default /etc/systemd/system/tailscaled.service.d
+    if [[ -f /etc/default/tailscaled ]] && grep -q '^FLAGS=' /etc/default/tailscaled; then
+        sed -i 's|^FLAGS=.*|FLAGS="--tun=userspace-networking"|' /etc/default/tailscaled
+    else
+        printf 'PORT="41641"\nFLAGS="--tun=userspace-networking"\n' > /etc/default/tailscaled
+    fi
+    cat > /etc/systemd/system/tailscaled.service.d/virt.conf << 'EOF'
+[Service]
+Environment=TS_DEBUG_FIREWALL_MODE=off
+RestartSec=2
+EOF
+    systemctl daemon-reload
+fi
+
 systemctl enable tailscaled
-tailscale up \
-    --auth-key="${TAILSCALE_OAUTH_SECRET}?ephemeral=false&preauthorized=true" \
-    --advertise-tags=tag:rpi \
-    --hostname="$NEW_HOSTNAME" \
-    --accept-routes
-log "Tailscale registered as $NEW_HOSTNAME"
+systemctl start tailscaled
+
+log "Waiting for tailscaled LocalAPI..."
+_ts_sock=""
+for _i in $(seq 1 60); do
+    if [[ -S /run/tailscale/tailscaled.sock ]]; then
+        _ts_sock=/run/tailscale/tailscaled.sock
+    elif [[ -S /var/run/tailscale/tailscaled.sock ]]; then
+        _ts_sock=/var/run/tailscale/tailscaled.sock
+    else
+        sleep 0.5
+        continue
+    fi
+    _code=$(curl -sS -o /dev/null -w '%{http_code}' --unix-socket "$_ts_sock" \
+        http://local-tailscaled.sock/localapi/v0/status || true)
+    if [[ "$_code" == "200" ]]; then
+        break
+    fi
+    sleep 0.5
+done
+[[ "${_code:-}" == "200" ]] \
+    || die "tailscaled LocalAPI never became ready (last HTTP ${_code:-none})"
+unset _ts_sock _code _i
+
+if [[ -n "$HEADSCALE_LOGIN_SERVER" ]]; then
+    [[ -n "$HEADSCALE_AUTH_KEY" ]] \
+        || die "HEADSCALE_LOGIN_SERVER is set but HEADSCALE_AUTH_KEY is empty"
+    log "Registering with Headscale at $HEADSCALE_LOGIN_SERVER..."
+    tailscale up \
+        --login-server="$HEADSCALE_LOGIN_SERVER" \
+        --auth-key="$HEADSCALE_AUTH_KEY" \
+        --hostname="$NEW_HOSTNAME" \
+        --accept-routes
+    log "Headscale registered as $NEW_HOSTNAME"
+else
+    log "Registering with Tailscale..."
+    tailscale up \
+        --auth-key="${TAILSCALE_OAUTH_SECRET}?ephemeral=false&preauthorized=true" \
+        --advertise-tags=tag:rpi \
+        --hostname="$NEW_HOSTNAME" \
+        --accept-routes
+    log "Tailscale registered as $NEW_HOSTNAME"
+fi
 
 # ── 16. Pull release artifacts from GitHub ────────────────────────────────────
-log "Fetching latest release from github.com/$GITHUB_REPO..."
+fetch_github_release() {
+    log "Fetching latest release from github.com/$GITHUB_REPO..."
+    local api="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
+    local code json
+    code=$(curl -sS -o /tmp/adspace-release.json -w '%{http_code}' "$api" || true)
+    if [[ "$code" != "200" ]]; then
+        die "GitHub releases/latest returned HTTP ${code:-000} for $GITHUB_REPO (no published release?). Tag and push: git tag v0.1.0 && git push origin v0.1.0"
+    fi
+    json=$(cat /tmp/adspace-release.json)
+    API_URL=$(echo "$json" | jq -r '.assets[] | select(.name == "wifi-setup-api") | .browser_download_url')
+    DIST_URL=$(echo "$json" | jq -r '.assets[] | select(.name == "wifi-setup-dist.tar.gz") | .browser_download_url')
+    RELEASE_TAG=$(echo "$json" | jq -r '.tag_name')
+    [[ -n "$API_URL" && "$API_URL" != "null" ]]  || die "No wifi-setup-api asset in release $RELEASE_TAG"
+    [[ -n "$DIST_URL" && "$DIST_URL" != "null" ]] || die "No wifi-setup-dist.tar.gz asset in release $RELEASE_TAG"
 
-# Get the latest release download URLs
-RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
-RELEASE_JSON=$(curl -sf "$RELEASE_API") || die "Failed to fetch release info from GitHub"
+    log "Pulling release $RELEASE_TAG..."
+    curl -fSL "$API_URL" -o /opt/adspace/wifi-setup-api
+    chmod +x /opt/adspace/wifi-setup-api
+    chown adspace:adspace /opt/adspace/wifi-setup-api
+    log "wifi-setup-api downloaded"
 
-API_URL=$(echo "$RELEASE_JSON" | jq -r '.assets[] | select(.name == "wifi-setup-api") | .browser_download_url')
-DIST_URL=$(echo "$RELEASE_JSON" | jq -r '.assets[] | select(.name == "wifi-setup-dist.tar.gz") | .browser_download_url')
-RELEASE_TAG=$(echo "$RELEASE_JSON" | jq -r '.tag_name')
+    mkdir -p /opt/adspace/wifi-setup/dist
+    curl -fSL "$DIST_URL" -o /tmp/wifi-setup-dist.tar.gz
+    tar -xzf /tmp/wifi-setup-dist.tar.gz -C /opt/adspace/wifi-setup/dist
+    rm /tmp/wifi-setup-dist.tar.gz
+    rm -f /opt/adspace/wifi-setup/dist/config.json
+    chown -R pi:pi /opt/adspace/wifi-setup/dist
+    chmod -R 775 /opt/adspace/wifi-setup/dist
+    log "Frontend deployed from release $RELEASE_TAG"
+}
 
-[[ -n "$API_URL" ]]  || die "No wifi-setup-api asset found in release $RELEASE_TAG"
-[[ -n "$DIST_URL" ]] || die "No wifi-setup-dist.tar.gz asset found in release $RELEASE_TAG"
-
-log "Pulling release $RELEASE_TAG..."
-
-# Download API binary
-curl -fSL "$API_URL" -o /opt/adspace/wifi-setup-api
-chmod +x /opt/adspace/wifi-setup-api
-chown adspace:adspace /opt/adspace/wifi-setup-api
-log "wifi-setup-api downloaded"
-
-# Download + unpack frontend
-curl -fSL "$DIST_URL" -o /tmp/wifi-setup-dist.tar.gz
-tar -xzf /tmp/wifi-setup-dist.tar.gz -C /opt/adspace/wifi-setup/dist
-rm /tmp/wifi-setup-dist.tar.gz
-# Never overwrite config.json — watchdog writes it at runtime
-rm -f /opt/adspace/wifi-setup/dist/config.json
-chown -R pi:pi /opt/adspace/wifi-setup/dist
-chmod -R 775 /opt/adspace/wifi-setup/dist
-log "Frontend deployed from release $RELEASE_TAG"
+if systemd-detect-virt -q 2>/dev/null || ! grep -q '^Serial' /proc/cpuinfo; then
+    warn "No GitHub release pull on VM — $GITHUB_REPO has no /releases/latest until you tag one"
+    warn "On a real Pi, publish with: git tag v0.1.0 && git push origin v0.1.0"
+else
+    fetch_github_release
+fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 touch "$DONE_FLAG"
