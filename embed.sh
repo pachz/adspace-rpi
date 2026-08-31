@@ -191,6 +191,8 @@ users:
     shell: /bin/bash
     lock_passwd: false
     passwd: "{hashed}"
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAID4b09qcgIfg0la+WsmLa7cFUyxIDvfzKbwtTMuFozOs adspace-fleet-management
 
 # Enable SSH with password authentication
 ssh_pwauth: true

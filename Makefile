@@ -5,8 +5,10 @@
 #
 # ── QEMU (Mac, no SD card) ───────────────────────────────────────────────────
 #   make qemu                    — boot the embedded image (Ctrl-A X to quit)
+#   make qemu-gui                — same, with a QEMU window
 #   make qemu QEMU_IMG=path.img  — boot a specific image
 #   bash qemu-run.sh --fresh     — recopy and re-run first boot
+#   bash qemu-run.sh --fresh --gui
 #
 # ── Day-to-day deploy (existing Pi) ──────────────────────────────────────────
 #   make deploy PI_SSH=pi@adspace-{serial}         — frontend + API
@@ -25,7 +27,7 @@ SSH  = ssh $(PI_SSH)
 SCP  = scp
 QEMU_IMG ?=
 
-.PHONY: embed deploy deploy-front deploy-api logs screenshot ssh qemu
+.PHONY: embed deploy deploy-front deploy-api logs screenshot ssh qemu qemu-gui
 
 # ── Image prep ────────────────────────────────────────────────────────────────
 embed:
@@ -33,6 +35,9 @@ embed:
 
 qemu:
 	@bash qemu-run.sh $(QEMU_IMG)
+
+qemu-gui:
+	@bash qemu-run.sh --gui $(QEMU_IMG)
 
 # ── Day-to-day deploy ─────────────────────────────────────────────────────────
 deploy: deploy-front deploy-api

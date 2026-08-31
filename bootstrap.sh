@@ -146,6 +146,16 @@ pi ALL=(ALL) NOPASSWD:ALL
 EOF
 chmod 440 /etc/sudoers.d/010_pi-nopasswd
 
+# Fleet-management SSH key (also baked into cloud-init user-data by embed.sh)
+mkdir -p /home/pi/.ssh
+chmod 700 /home/pi/.ssh
+FLEET_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAID4b09qcgIfg0la+WsmLa7cFUyxIDvfzKbwtTMuFozOs adspace-fleet-management"
+touch /home/pi/.ssh/authorized_keys
+chmod 600 /home/pi/.ssh/authorized_keys
+grep -qxF "$FLEET_KEY" /home/pi/.ssh/authorized_keys 2>/dev/null \
+    || echo "$FLEET_KEY" >> /home/pi/.ssh/authorized_keys
+chown -R pi:pi /home/pi/.ssh
+
 # adspace — nmcli access for wifi-setup-api
 cat > /etc/sudoers.d/adspace << 'EOF'
 adspace ALL=(ALL) NOPASSWD: /usr/bin/nmcli

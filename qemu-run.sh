@@ -9,13 +9,17 @@
 #   bash qemu-run.sh                         # default: images/adspace-tv-v0.1.9.img
 #   bash qemu-run.sh images/adspace-tv.img   # explicit image
 #   bash qemu-run.sh --fresh                 # recopy from source (re-run first boot)
+#   bash qemu-run.sh --gui                   # Cocoa window instead of serial-only
+#   bash qemu-run.sh --fresh --gui
 #   make qemu
+#   make qemu-gui
 #
 # SSH (from another terminal, once cloud-init has enabled ssh):
 #   ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null pi@127.0.0.1
 #   password: adspace
 #
-# Quit QEMU:  Ctrl-A then X
+# Quit serial mode:  Ctrl-A then X
+# Quit GUI mode:     close the QEMU window
 #
 # HOW IT WORKS:
 #   QEMU cannot emulate a Pi 5. We boot the disk image on a generic ARM64
@@ -64,6 +68,7 @@ APT_PROXY_PORT="${APT_PROXY_PORT:-3142}"
 # SLIRP hostfwd IP distinct from the 10.0.2.2 gateway
 APT_PROXY_GUEST="10.0.2.253"
 FRESH=0
+GUI=0
 
 KERNEL_URL="https://cloud-images.ubuntu.com/noble/current/unpacked/noble-server-cloudimg-arm64-vmlinuz-generic"
 INITRD_URL="https://cloud-images.ubuntu.com/noble/current/unpacked/noble-server-cloudimg-arm64-initrd-generic"
@@ -75,6 +80,7 @@ SRC_IMG=""
 for arg in "$@"; do
     case "$arg" in
         --fresh) FRESH=1 ;;
+        --gui) GUI=1 ;;
         -h|--help)
             sed -n '2,35p' "$0"
             exit 0
@@ -340,35 +346,57 @@ accel_args() {
 }
 
 run_vm() {
-    local accel cpu
+    local accel cpu append
     read -r accel cpu <<<"$(accel_args)"
+    append="root=/dev/vda2 rw rootfstype=ext4 rootwait fsck.repair=yes console=ttyAMA0,115200 net.ifnames=0 biosdevname=0 systemd.unified_cgroup_hierarchy=1 systemd.mask=systemd-networkd-wait-online.service"
+
+    local -a extra=()
+    if [[ "$GUI" -eq 1 ]]; then
+        append+=" console=tty0"
+        extra+=(
+            -display cocoa
+            -device virtio-gpu-pci
+            -device virtio-keyboard-pci
+            -device virtio-mouse-pci
+        )
+        log "Display: Cocoa window (virtio-gpu)"
+    else
+        extra+=(-nographic)
+    fi
+
     log "Machine: virt  accel=${accel}  cpu=${cpu}  ram=${RAM_MB}M  ssh=localhost:${SSH_PORT}"
     echo
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "  Serial console attached. Bootstrap logs will stream here."
+    if [[ "$GUI" -eq 1 ]]; then
+        echo "  GUI window + serial. Boot/login appear in the QEMU window."
+        echo "  Quit:     close the QEMU window"
+    else
+        echo "  Serial console attached. Bootstrap logs will stream here."
+        echo "  Quit:     Ctrl-A then X"
+        echo "  GUI:      bash qemu-run.sh --gui"
+    fi
     echo
     echo "  SSH:      ssh -p ${SSH_PORT} pi@127.0.0.1"
     echo "  Password: adspace"
     echo "  Apt cache: ${CACHE_DIR}/apt-proxy  (proxy ${APT_PROXY_GUEST}:${APT_PROXY_PORT})"
-    echo "  Quit:     Ctrl-A then X"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo
 
     exec qemu-system-aarch64 \
-        -nographic \
         -machine virt,accel="${accel}",gic-version=3 \
         -cpu "${cpu}" \
         -smp 4 \
         -m "${RAM_MB}" \
         -kernel "${CACHE_DIR}/Image" \
         -initrd "$INITRD_PATH" \
-        -append "root=/dev/vda2 rw rootfstype=ext4 rootwait fsck.repair=yes console=ttyAMA0,115200 net.ifnames=0 biosdevname=0 systemd.unified_cgroup_hierarchy=1 systemd.mask=systemd-networkd-wait-online.service" \
+        -append "$append" \
         -drive "if=none,file=${WORK_IMG},format=raw,id=hd0,cache=writeback" \
         -device virtio-blk-pci,drive=hd0,bootindex=1 \
         -netdev "user,id=net0,hostfwd=tcp::${SSH_PORT}-:22,guestfwd=tcp:${APT_PROXY_GUEST}:${APT_PROXY_PORT}-cmd:nc 127.0.0.1 ${APT_PROXY_PORT}" \
         -device virtio-net-pci,netdev=net0 \
         -device virtio-rng-pci \
-        -serial mon:stdio
+        -serial mon:stdio \
+        "${extra[@]}"
 }
 
 ensure_qemu
