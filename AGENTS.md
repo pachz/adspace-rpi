@@ -125,7 +125,9 @@ ssh pi@adspace-{serial} "sudo chmod +x /opt/adspace/watchdog.sh && sudo systemct
 ```
 
 ### Releasing a new version (frontend + API + flash image)
-Tag and push — GitHub Actions builds the Go API, frontend tarball, and the flashable `.img.xz`:
+Commit on `main` with message exactly `v1.2.3` (first line, nothing else). GitHub Actions creates the git tag and builds the Go API, frontend tarball, and flashable `.img.xz`.
+
+Manual tag still works:
 ```bash
 git tag v1.2.3 && git push origin v1.2.3
 ```

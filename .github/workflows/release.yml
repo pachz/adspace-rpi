@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - 'v*'
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       attach_to_release:
@@ -19,13 +21,73 @@ env:
   RASPIOS_SHA256: acff736ca7945e3b305f07cda4abdb870910e12634991da69783611756e381b3
 
 jobs:
-  release:
-    if: github.ref_type == 'tag'
+  # GITHUB_TOKEN tag pushes do not retrigger this workflow, so we create the
+  # tag here and then run release/image in the same run.
+  tag:
+    if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      created: ${{ steps.match.outputs.created }}
+      tag: ${{ steps.match.outputs.tag }}
 
     steps:
+      - name: Match vx.x.x commit message
+        id: match
+        env:
+          MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          SUBJECT=$(printf '%s\n' "$MESSAGE" | head -n1 | tr -d '\r' | sed 's/[[:space:]]*$//')
+          if [[ "$SUBJECT" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "tag=${SUBJECT}" >> "$GITHUB_OUTPUT"
+            echo "created=true" >> "$GITHUB_OUTPUT"
+            echo "Commit message is ${SUBJECT} — will create tag"
+          else
+            echo "created=false" >> "$GITHUB_OUTPUT"
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            echo "Commit message is not vx.x.x — skip tag"
+          fi
+
+      - name: Checkout
+        if: steps.match.outputs.created == 'true'
+        uses: actions/checkout@v4
+
+      - name: Create and push tag
+        if: steps.match.outputs.created == 'true'
+        env:
+          TAG: ${{ steps.match.outputs.tag }}
+        run: |
+          git tag "$TAG"
+          git push origin "refs/tags/${TAG}"
+
+  release:
+    needs: [tag]
+    if: |
+      always() && (
+        github.ref_type == 'tag' ||
+        (needs.tag.result == 'success' && needs.tag.outputs.created == 'true')
+      )
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+
+    steps:
+      - name: Resolve tag
+        id: meta
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          CREATED_TAG: ${{ needs.tag.outputs.tag }}
+        run: |
+          if [[ "$REF_TYPE" == "tag" ]]; then
+            echo "tag=${REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${CREATED_TAG}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -67,6 +129,7 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.meta.outputs.tag }}
           files: |
             wifi-setup-api/wifi-setup-api
             wifi-setup-dist.tar.gz
@@ -74,7 +137,11 @@ jobs:
 
   image:
     needs: [release]
-    if: always() && (needs.release.result == 'success' || needs.release.result == 'skipped')
+    if: |
+      always() && (
+        needs.release.result == 'success' ||
+        (github.event_name == 'workflow_dispatch' && needs.release.result == 'skipped')
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -88,12 +155,16 @@ jobs:
         env:
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
           ATTACH: ${{ inputs.attach_to_release }}
           SHA: ${{ github.sha }}
         run: |
           if [[ "$REF_TYPE" == "tag" ]]; then
             echo "name=adspace-tv-${REF_NAME}" >> "$GITHUB_OUTPUT"
             echo "release_tag=${REF_NAME}" >> "$GITHUB_OUTPUT"
+          elif [[ -n "$RELEASE_TAG" ]]; then
+            echo "name=adspace-tv-${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+            echo "release_tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
           elif [[ -n "$ATTACH" ]]; then
             echo "name=adspace-tv-${ATTACH}" >> "$GITHUB_OUTPUT"
             echo "release_tag=${ATTACH}" >> "$GITHUB_OUTPUT"

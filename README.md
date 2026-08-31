@@ -107,7 +107,7 @@ rpi/
 │
 ├── .github/
 │   └── workflows/
-│       └── release.yml       # Builds wifi-setup-api + frontend + flash .img.xz on version tag
+│       └── release.yml       # Auto-tags vx.x.x commits on main; builds API + frontend + .img.xz
 │
 ├── wifi-setup/               # React frontend (TV page + phone setup page)
 │   ├── src/
@@ -255,11 +255,13 @@ pnpm dev
 ```
 
 ### Releasing a new version
-Tag and push — GitHub Actions builds both artifacts automatically:
+Commit on `main` with message exactly `v1.2.3` — GitHub Actions creates the tag and builds the API, frontend, and flash image.
+
+Or tag manually:
 ```bash
 git tag v1.2.3 && git push origin v1.2.3
 ```
-This publishes `wifi-setup-api` (arm64 binary) and `wifi-setup-dist.tar.gz` to GitHub Releases. Newly provisioned Pis pull the latest release. Existing Pis need `make deploy`.
+This publishes `wifi-setup-api` (arm64 binary), `wifi-setup-dist.tar.gz`, and `adspace-tv-v1.2.3.img.xz` to GitHub Releases. Newly provisioned Pis pull the latest release. Existing Pis need `make deploy`.
 
 ---
 
