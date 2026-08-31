@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# AdSpace RPi — Embed Script (Mac-side)
+# AdSpace RPi — Embed Script
 # =============================================================================
 # Injects bootstrap.sh + adspace-bootstrap.service into a vanilla
 # Raspberry Pi OS Lite 64-bit .img file so it self-provisions on first boot.
@@ -11,9 +11,9 @@
 # EXAMPLE:
 #   ./embed.sh ~/Downloads/2026-06-18-raspios-trixie-arm64-lite.img images/adspace-tv-v0.1.5.img
 #
-# REQUIREMENTS (Mac):
-#   hdiutil — built into macOS, no install needed
-#   openssl — built into macOS, no install needed
+# REQUIREMENTS:
+#   macOS:  hdiutil + python3 (built in)
+#   Linux:  python3, sfdisk (util-linux), sudo for losetup/mount
 #
 # HOW IT WORKS:
 #   This RPi OS Trixie image uses cloud-init (not the firstboot/firstrun.sh
@@ -26,7 +26,8 @@
 #
 #   All files also placed on the boot partition so cloud-init can reference them.
 #
-# IDEMPOTENT: always starts fresh from the input image.
+# IDEMPOTENT: always starts fresh from the input image (unless input == output,
+# in which case it embeds in place — used by CI to save a 2.8G copy).
 # =============================================================================
 
 set -euo pipefail
@@ -37,6 +38,7 @@ warn() { echo -e "${YELLOW}[embed]${NC} WARN: $*"; }
 die()  { echo -e "${RED}[embed]${NC} ERROR: $*" >&2; exit 1; }
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OS="$(uname -s)"
 
 # ── Credentials ───────────────────────────────────────────────────────────────
 PI_PASSWORD="adspace"
@@ -51,44 +53,103 @@ OUTPUT_IMG="${2:-${REPO_DIR}/images/adspace-tv.img}"
     || die "bootstrap.sh not found in repo root"
 [[ -f "$REPO_DIR/adspace-bootstrap.service" ]] \
     || die "adspace-bootstrap.service not found in repo root"
+[[ "$OS" == "Darwin" || "$OS" == "Linux" ]] \
+    || die "Unsupported OS: $OS (need macOS or Linux)"
 
 log "Input:  $INPUT_IMG"
 log "Output: $OUTPUT_IMG"
 
-# ── Copy image ────────────────────────────────────────────────────────────────
-log "Copying image..."
-cp "$INPUT_IMG" "$OUTPUT_IMG"
+mkdir -p "$(dirname "$OUTPUT_IMG")"
+
+# ── Copy image (skip when embedding in place) ─────────────────────────────────
+INPUT_REAL=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$INPUT_IMG")
+OUTPUT_REAL=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$OUTPUT_IMG")
+if [[ "$INPUT_REAL" != "$OUTPUT_REAL" ]]; then
+    log "Copying image..."
+    cp "$INPUT_IMG" "$OUTPUT_IMG"
+else
+    log "Embedding in place (input and output are the same file)"
+fi
 
 # ── Attach + mount boot partition ─────────────────────────────────────────────
-log "Attaching image..."
-HDIUTIL_OUT=$(hdiutil attach "$OUTPUT_IMG" \
-    -imagekey diskimage-class=CRawDiskImage -nomount 2>&1)
-
-WHOLE_DISK=$(echo "$HDIUTIL_OUT" | awk 'NR==1{print $1}')
-DISK_DEV=$(echo "$HDIUTIL_OUT"   | awk '/Windows_FAT/{print $1}' | head -1)
-
-[[ -n "$DISK_DEV" ]] || {
-    hdiutil detach "$WHOLE_DISK" 2>/dev/null || true
-    die "Could not find FAT32 boot partition.\nhdiutil output:\n$HDIUTIL_OUT"
-}
-
 MOUNT_DIR=$(mktemp -d)
+WHOLE_DISK=""
+DISK_DEV=""
+LOOP_DEV=""
+
 cleanup() {
     sync 2>/dev/null || true
-    umount "$MOUNT_DIR" 2>/dev/null || diskutil unmount force "$DISK_DEV" 2>/dev/null || true
-    rmdir  "$MOUNT_DIR" 2>/dev/null || true
-    hdiutil detach "$WHOLE_DISK" 2>/dev/null || true
+    if [[ -n "${MOUNT_DIR:-}" ]]; then
+        if [[ "$OS" == "Darwin" ]]; then
+            umount "$MOUNT_DIR" 2>/dev/null \
+                || diskutil unmount force "${DISK_DEV:-}" 2>/dev/null \
+                || true
+        else
+            sudo umount "$MOUNT_DIR" 2>/dev/null || true
+        fi
+        rmdir "$MOUNT_DIR" 2>/dev/null || true
+    fi
+    if [[ "$OS" == "Darwin" && -n "${WHOLE_DISK:-}" ]]; then
+        hdiutil detach "$WHOLE_DISK" 2>/dev/null || true
+    elif [[ -n "${LOOP_DEV:-}" ]]; then
+        sudo losetup -d "$LOOP_DEV" 2>/dev/null || true
+    fi
 }
 trap cleanup EXIT
 
-mount_msdos "$DISK_DEV" "$MOUNT_DIR" \
-    || die "Could not mount boot partition ($DISK_DEV)"
+log "Attaching image..."
+
+if [[ "$OS" == "Darwin" ]]; then
+    HDIUTIL_OUT=$(hdiutil attach "$OUTPUT_IMG" \
+        -imagekey diskimage-class=CRawDiskImage -nomount 2>&1)
+
+    WHOLE_DISK=$(echo "$HDIUTIL_OUT" | awk 'NR==1{print $1}')
+    DISK_DEV=$(echo "$HDIUTIL_OUT"   | awk '/Windows_FAT/{print $1}' | head -1)
+
+    [[ -n "$DISK_DEV" ]] || {
+        hdiutil detach "$WHOLE_DISK" 2>/dev/null || true
+        die "Could not find FAT32 boot partition.\nhdiutil output:\n$HDIUTIL_OUT"
+    }
+
+    mount_msdos "$DISK_DEV" "$MOUNT_DIR" \
+        || die "Could not mount boot partition ($DISK_DEV)"
+else
+    command -v sfdisk >/dev/null 2>&1 || die "sfdisk not found (install util-linux)"
+
+    LOOP_DEV=$(sudo losetup -P --find --show "$OUTPUT_IMG")
+    BOOT_PART=""
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        if [[ -b "${LOOP_DEV}p1" ]]; then
+            BOOT_PART="${LOOP_DEV}p1"
+            break
+        fi
+        sleep 0.3
+    done
+
+    if [[ -n "$BOOT_PART" ]]; then
+        sudo mount -t vfat -o "uid=$(id -u),gid=$(id -g)" \
+            "$BOOT_PART" "$MOUNT_DIR" \
+            || die "Could not mount boot partition ($BOOT_PART)"
+    else
+        # Partition nodes did not appear — offset-mount partition 1 instead.
+        START=$(sfdisk --json "$OUTPUT_IMG" | python3 -c \
+            "import json,sys; print(json.load(sys.stdin)['partitiontable']['partitions'][0]['start'])")
+        SECTOR=$(sfdisk --json "$OUTPUT_IMG" | python3 -c \
+            "import json,sys; print(json.load(sys.stdin)['partitiontable'].get('sectorsize', 512))")
+        sudo losetup -d "$LOOP_DEV" 2>/dev/null || true
+        LOOP_DEV=""
+        sudo mount -t vfat \
+            -o "loop,offset=$((START * SECTOR)),uid=$(id -u),gid=$(id -g)" \
+            "$OUTPUT_IMG" "$MOUNT_DIR" \
+            || die "Could not mount boot partition (offset $((START * SECTOR)))"
+    fi
+fi
 
 log "Mounted at $MOUNT_DIR"
 
 # ── Hash the password ─────────────────────────────────────────────────────────
 # LibreSSL (macOS /usr/bin/openssl) does not support `passwd -6` (SHA-512 crypt).
-# Prefer OpenSSL 3 if present (Homebrew); otherwise a Python SHA-512 crypt.
+# Prefer OpenSSL 3 if present (Homebrew / Linux); otherwise a Python SHA-512 crypt.
 hash_password() {
     local pw="$1" candidate hashed
     for candidate in \

@@ -97,7 +97,7 @@ Every ~60s in setup mode → try_reconnect():
 rpi/
 ├── bootstrap.sh              # Full provisioning — runs on Pi first boot, installs everything
 ├── adspace-bootstrap.service # Systemd unit that runs bootstrap.sh once on first boot
-├── embed.sh                  # Mac tool: injects bootstrap into vanilla RPi OS .img
+├── embed.sh                  # Injects bootstrap into vanilla RPi OS .img (macOS or Linux)
 ├── watchdog.sh               # Source copy of /opt/adspace/watchdog.sh (also embedded in bootstrap.sh)
 ├── start-display.sh          # Source copy of /opt/adspace/start-display.sh (also embedded in bootstrap.sh)
 ├── kiosk.env                 # Source copy of /opt/adspace/kiosk.env
@@ -107,7 +107,7 @@ rpi/
 │
 ├── .github/
 │   └── workflows/
-│       └── release.yml       # Builds wifi-setup-api + frontend dist on version tag, publishes to GitHub Releases
+│       └── release.yml       # Builds wifi-setup-api + frontend + flash .img.xz on version tag
 │
 ├── wifi-setup/               # React frontend (TV page + phone setup page)
 │   ├── src/
@@ -164,24 +164,22 @@ rpi/
 ### Requirements
 - Raspberry Pi 5 (4GB or 8GB)
 - SD card (16GB+)
-- Mac (`hdiutil` + `python3` are built in — no extras needed for image building)
 - `brew install go pnpm` for frontend/API development
 - Ethernet cable (required for first-boot provisioning)
-- Vanilla **Raspberry Pi OS Lite 64-bit (Trixie)** `.img` from [raspberrypi.com/software/operating-systems](https://www.raspberrypi.com/software/operating-systems/)
 
-### Step 1 — Build the base image (one time, reuse for all Pis)
+### Step 1 — Get the flash image
+
+**Preferred:** download `adspace-tv-vX.Y.Z.img.xz` from the [latest GitHub Release](https://github.com/pachz/adspace-rpi/releases/latest). Raspberry Pi Imager opens `.xz` directly. You only need one image — reuse it for every Pi.
+
+**Or build locally** (macOS or Linux) from a vanilla **Raspberry Pi OS Lite 64-bit (Trixie)** `.img`:
 ```bash
-./embed.sh ~/Downloads/2026-xx-xx-raspios-trixie-arm64-lite.img images/adspace-tv-v0.1.9.img
-# Outputs: images/adspace-tv-v0.1.9.img
+./embed.sh ~/Downloads/2026-06-18-raspios-trixie-arm64-lite.img images/adspace-tv-v0.1.9.img
 ```
-
-Downloads the vanilla **Raspberry Pi OS Lite 64-bit (Trixie)** image from [raspberrypi.com/software/operating-systems](https://www.raspberrypi.com/software/operating-systems/) and injects `bootstrap.sh` via cloud-init. You only need to do this once — reuse the output image for every Pi.
-
-> `embed.sh` requires macOS (`hdiutil` + `python3` — both built in, no brew installs needed).
+On Linux, `embed.sh` needs sudo (`losetup` / `mount`). On macOS it uses `hdiutil` (built in).
 
 ### Step 2 — Flash the image
 Open **Raspberry Pi Imager**:
-- OS: **Use Custom** → select `images/adspace-tv-v0.1.9.img`
+- OS: **Use Custom** → select the `.img.xz` (or local `.img`)
 - Storage: your SD card
 - **Do not customise** — no username, no SSH, no WiFi. Everything is baked in.
 - Flash
@@ -421,7 +419,7 @@ adspace-cairo-downtown-02
 ## Architecture decisions
 
 ### Full runtime provisioning
-A vanilla RPi OS Lite image has `bootstrap.sh` + `adspace-bootstrap.service` injected via `embed.sh` (Mac-side). On first boot, bootstrap installs all packages, configures all services, and pulls the app binary + frontend from GitHub Releases. No "golden image" to maintain, no `prepare-image.sh` step, no cloning workflow. Any Pi flashed from `adspace-tv.img` self-configures completely on first boot.
+A vanilla RPi OS Lite image has `bootstrap.sh` + `adspace-bootstrap.service` injected via `embed.sh` (locally or in GitHub Actions). On first boot, bootstrap installs all packages, configures all services, and pulls the app binary + frontend from GitHub Releases. No "golden image" to maintain, no `prepare-image.sh` step, no cloning workflow. Any Pi flashed from `adspace-tv.img` self-configures completely on first boot.
 
 ### GitHub Releases for app artifacts
 `bootstrap.sh` fetches `wifi-setup-api` and `wifi-setup-dist.tar.gz` from the latest GitHub Release. This means:

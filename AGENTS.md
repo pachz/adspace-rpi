@@ -25,12 +25,13 @@ Boot 2: adspace-bootstrap.service runs → full provisioning (~10 min, needs eth
 Boot 3+: Normal operation — adspace-watchdog controls kiosk/setup transitions
 ```
 
-**To cut a new base image (Mac-side, one time):**
+**To cut a new base image:** GitHub Actions builds `adspace-tv-vX.Y.Z.img.xz` on every `v*` tag (and via workflow_dispatch). Download it from the GitHub Release and flash with Raspberry Pi Imager — no customisation.
+
+Locally (macOS or Linux):
 ```bash
-# hdiutil + python3 are built into macOS — no extra tools needed
-./embed.sh ~/Downloads/2026-xx-xx-raspios-trixie-arm64-lite.img images/adspace-tv-v0.1.9.img
-# Outputs: images/adspace-tv-v0.1.9.img — flash this with Raspberry Pi Imager (no customisation)
+./embed.sh ~/Downloads/2026-06-18-raspios-trixie-arm64-lite.img images/adspace-tv-v0.1.9.img
 ```
+The official Lite image URL + SHA-256 are pinned in `.github/workflows/release.yml`. Bump both when Raspberry Pi publishes a new Lite image.
 
 **There is no `provision.sh`, `flash.sh`, or `prepare-image.sh`.** Those are gone. `bootstrap.sh` is the single source of truth for what's on a Pi.
 
@@ -123,12 +124,14 @@ ssh pi@adspace-{serial} "sudo tee /opt/adspace/watchdog.sh" < watchdog.sh
 ssh pi@adspace-{serial} "sudo chmod +x /opt/adspace/watchdog.sh && sudo systemctl restart adspace-watchdog"
 ```
 
-### Releasing a new version (frontend + API)
-Tag and push — GitHub Actions builds both artifacts and publishes them to GitHub Releases:
+### Releasing a new version (frontend + API + flash image)
+Tag and push — GitHub Actions builds the Go API, frontend tarball, and the flashable `.img.xz`:
 ```bash
 git tag v1.2.3 && git push origin v1.2.3
 ```
-Newly provisioned Pis will pull the latest release. Existing Pis need `make deploy`.
+Newly provisioned Pis pull `wifi-setup-api` + `wifi-setup-dist.tar.gz` from the latest release. Existing Pis need `make deploy`. Flash new SD cards from `adspace-tv-v1.2.3.img.xz` on the same release.
+
+To rebuild only the image (e.g. after a `bootstrap.sh` fix) without a new tag: Actions → Release → Run workflow → optionally set `attach_to_release` to an existing tag.
 
 ---
 
@@ -441,7 +444,7 @@ ssh pi@adspace-{serial} "ss -tlnp | grep 3000"
 | Checking NM connection profile state for connectivity | Profiles stay `activated` even with cable unplugged — use `nmcli networking connectivity` |
 | Using legacy `hdmi_force_hotplug=1` in config.txt | Silently ignored on Pi 5 — use `dtparam=hdmi_force_hotplug=1` under `[all]` |
 | Editing watchdog.sh without updating bootstrap.sh | Newly provisioned Pis get the old embedded version from bootstrap.sh |
-| Running embed.sh on Linux | embed.sh uses hdiutil which is macOS-only — run it on a Mac |
+| Uploading an uncompressed `.img` to GitHub Releases | File limit is 2 GB; Lite is ~2.8 GB — always publish `.img.xz` |
 | Using unquoted heredoc in embed.sh | Bash expands `$VAR`/`$()` inside bootstrap.sh content → file written as 0 bytes; use Python or quoted `<< 'DELIM'` with no expansions needed |
 | Inline Caddyfile handle blocks | `handle /path { ... }` on one line is rejected by Caddy 2.6.2 — always use multiline blocks |
 | Customising the image in Raspberry Pi Imager | User-data already creates the pi user with password `adspace` and enables SSH — Imager customisation conflicts with cloud-init and is not needed |

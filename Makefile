@@ -1,6 +1,6 @@
 # AdSpace RPi — Makefile
 #
-# ── Image prep (one time, when cutting a new base image) ──────────────────────
+# ── Image prep (prefer the GitHub Release .img.xz; this is the local path) ───
 #   make embed IMG=~/Downloads/rpios-lite.img
 #
 # ── QEMU (Mac, no SD card) ───────────────────────────────────────────────────

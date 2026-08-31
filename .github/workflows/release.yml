@@ -4,9 +4,23 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      attach_to_release:
+        description: 'Existing release tag to attach the image to (e.g. v1.2.3). Leave empty to upload as a workflow artifact only.'
+        required: false
+        type: string
+        default: ''
+
+# Pin the official Lite image. Bump URL + SHA together when Raspberry Pi
+# publishes a new raspios_lite_arm64 release.
+env:
+  RASPIOS_URL: https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_lite_arm64-2026-06-19/2026-06-18-raspios-trixie-arm64-lite.img.xz
+  RASPIOS_SHA256: acff736ca7945e3b305f07cda4abdb870910e12634991da69783611756e381b3
 
 jobs:
   release:
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -57,3 +71,65 @@ jobs:
             wifi-setup-api/wifi-setup-api
             wifi-setup-dist.tar.gz
           generate_release_notes: true
+
+  image:
+    needs: [release]
+    if: always() && (needs.release.result == 'success' || needs.release.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set image name
+        id: meta
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          ATTACH: ${{ inputs.attach_to_release }}
+          SHA: ${{ github.sha }}
+        run: |
+          if [[ "$REF_TYPE" == "tag" ]]; then
+            echo "name=adspace-tv-${REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "release_tag=${REF_NAME}" >> "$GITHUB_OUTPUT"
+          elif [[ -n "$ATTACH" ]]; then
+            echo "name=adspace-tv-${ATTACH}" >> "$GITHUB_OUTPUT"
+            echo "release_tag=${ATTACH}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=adspace-tv-${SHA:0:7}" >> "$GITHUB_OUTPUT"
+            echo "release_tag=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download Raspberry Pi OS Lite
+        run: |
+          curl -fL --retry 3 --retry-delay 5 -o raspios.img.xz "$RASPIOS_URL"
+          echo "$RASPIOS_SHA256  raspios.img.xz" | sha256sum -c -
+
+      - name: Decompress and embed
+        env:
+          IMG_NAME: ${{ steps.meta.outputs.name }}
+        run: |
+          mkdir -p images
+          xz -T0 -dkc raspios.img.xz > "images/${IMG_NAME}.img"
+          rm -f raspios.img.xz
+          bash embed.sh "images/${IMG_NAME}.img" "images/${IMG_NAME}.img"
+          xz -T0 "images/${IMG_NAME}.img"
+          ls -lh "images/${IMG_NAME}.img.xz"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.name }}
+          path: images/${{ steps.meta.outputs.name }}.img.xz
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Attach image to release
+        if: steps.meta.outputs.release_tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.release_tag }}
+          files: images/${{ steps.meta.outputs.name }}.img.xz
+          fail_on_unmatched_files: true
