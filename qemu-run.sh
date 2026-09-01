@@ -30,9 +30,10 @@
 #   A working copy is used (never mutates the source image). It is grown to
 #   16G so apt/chromium during bootstrap has room.
 #
-#   Apt .deb files are cached on the Mac (images/qemu/apt-proxy/) via a local
-#   HTTP proxy. --fresh still recopies the disk, but Chromium etc. are served
-#   from cache after the first download. Package indexes are always fetched live.
+#   Apt .deb files are cached. If APT_PROXY is set in .env (apt-cacher-ng on
+#   the LAN), the guest uses that. Otherwise a local HTTP proxy on the Mac
+#   (images/qemu/apt-proxy/). --fresh still recopies the disk, but packages
+#   are served from cache after the first download.
 #
 # WHAT THIS TESTS:
 #   cloud-init, SSH, apt, most of bootstrap.sh, Headscale/Tailscale (if
@@ -253,11 +254,11 @@ patch_user_data() {
     trap cleanup_boot EXIT
     [[ -n "$QEMU_FAT" ]] || die "No FAT boot partition in working copy"
     mount_msdos "$QEMU_FAT" "$QEMU_MNT" || die "Could not mount boot partition"
-    python3 - "$QEMU_MNT/user-data" "$APT_PROXY_GUEST" "$APT_PROXY_PORT" << 'PY'
+    python3 - "$QEMU_MNT/user-data" "$APT_PROXY_GUEST" "$APT_PROXY_PORT" "${APT_PROXY:-}" << 'PY'
 from pathlib import Path
 import sys
 p = Path(sys.argv[1])
-guest, port = sys.argv[2], sys.argv[3]
+guest, port, lan_proxy = sys.argv[2], sys.argv[3], sys.argv[4]
 text = p.read_text()
 needle = "users:"
 if needle not in text:
@@ -278,7 +279,9 @@ proxy_line = (
     f"  - echo 'Acquire::http::Proxy \"http://{guest}:{port}\";' "
     f"> /etc/apt/apt.conf.d/01qemu-proxy"
 )
-if "01qemu-proxy" not in text:
+if lan_proxy.strip():
+    print("skipping qemu apt proxy (APT_PROXY set)")
+elif "01qemu-proxy" not in text:
     if "  - resize2fs /dev/vda2 || true\n" not in text:
         raise SystemExit("bootcmd missing resize2fs; cannot inject apt proxy")
     extra = (
@@ -332,6 +335,20 @@ HEADSCALE_AUTH_KEY=${HEADSCALE_AUTH_KEY}
 EOF
         log "Headscale: guest will join ${HEADSCALE_LOGIN_SERVER}"
     fi
+    if [[ -n "${APT_PROXY:-}" ]]; then
+        cat > "$QEMU_MNT/adspace-apt.env" << EOF
+APT_PROXY=${APT_PROXY}
+EOF
+        log "Apt proxy: guest will use ${APT_PROXY}"
+    fi
+    if [[ -n "${ADSPACE_URL:-}" ]]; then
+        [[ "$ADSPACE_URL" =~ ^https?://[^[:space:]]+$ ]] \
+            || die "Invalid ADSPACE_URL: $ADSPACE_URL"
+        cat > "$QEMU_MNT/adspace-kiosk.env" << EOF
+ADSPACE_URL=${ADSPACE_URL}
+EOF
+        log "Kiosk URL: guest will use ${ADSPACE_URL}"
+    fi
     cleanup_boot
     trap - EXIT
 }
@@ -378,7 +395,11 @@ run_vm() {
     echo
     echo "  SSH:      ssh -p ${SSH_PORT} pi@127.0.0.1"
     echo "  Password: adspace"
-    echo "  Apt cache: ${CACHE_DIR}/apt-proxy  (proxy ${APT_PROXY_GUEST}:${APT_PROXY_PORT})"
+    if [[ -n "${APT_PROXY:-}" ]]; then
+        echo "  Apt cache: ${APT_PROXY}"
+    else
+        echo "  Apt cache: ${CACHE_DIR}/apt-proxy  (proxy ${APT_PROXY_GUEST}:${APT_PROXY_PORT})"
+    fi
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo
 
@@ -401,6 +422,8 @@ run_vm() {
 
 ensure_qemu
 ensure_kernel
-ensure_apt_proxy
+if [[ -z "${APT_PROXY:-}" ]]; then
+    ensure_apt_proxy
+fi
 prepare_disk
 run_vm

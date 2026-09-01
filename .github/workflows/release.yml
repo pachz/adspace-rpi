@@ -181,19 +181,37 @@ jobs:
       - name: Decompress and embed
         env:
           IMG_NAME: ${{ steps.meta.outputs.name }}
+          DEV_APT_PROXY: http://192.168.10.106:3142
+          DEV_ADSPACE_URL: https://dev.adspace.live
         run: |
           mkdir -p images
-          xz -T0 -dkc raspios.img.xz > "images/${IMG_NAME}.img"
+          xz -T0 -dkc raspios.img.xz > images/pristine.img
           rm -f raspios.img.xz
+
+          embed_flavor() {
+            local out="$1"
+            cp images/pristine.img "$out"
+            bash embed.sh "$out" "$out"
+            xz -T0 "$out"
+            ls -lh "${out}.xz"
+          }
+
           set -a
           # shellcheck disable=SC1091
           source .env.example
           set +a
-          bash embed.sh "images/${IMG_NAME}.img" "images/${IMG_NAME}.img"
-          xz -T0 "images/${IMG_NAME}.img"
-          ls -lh "images/${IMG_NAME}.img.xz"
+          unset APT_PROXY ADSPACE_URL
+          echo "Embedding prod (kiosk https://screen.adspace.so, no apt proxy)"
+          embed_flavor "images/${IMG_NAME}.img"
 
-      - name: Upload workflow artifact
+          export APT_PROXY="$DEV_APT_PROXY"
+          export ADSPACE_URL="$DEV_ADSPACE_URL"
+          echo "Embedding dev (kiosk ${ADSPACE_URL}, apt proxy ${APT_PROXY})"
+          embed_flavor "images/${IMG_NAME}-dev.img"
+
+          rm -f images/pristine.img
+
+      - name: Upload prod image
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.meta.outputs.name }}
@@ -201,10 +219,20 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
-      - name: Attach image to release
+      - name: Upload dev image
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.name }}-dev
+          path: images/${{ steps.meta.outputs.name }}-dev.img.xz
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Attach images to release
         if: steps.meta.outputs.release_tag != ''
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.release_tag }}
-          files: images/${{ steps.meta.outputs.name }}.img.xz
+          files: |
+            images/${{ steps.meta.outputs.name }}.img.xz
+            images/${{ steps.meta.outputs.name }}-dev.img.xz
           fail_on_unmatched_files: true

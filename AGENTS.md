@@ -25,13 +25,20 @@ Boot 2: adspace-bootstrap.service runs → full provisioning (~10 min, needs eth
 Boot 3+: Normal operation — adspace-watchdog controls kiosk/setup transitions
 ```
 
-**To cut a new base image:** GitHub Actions builds `adspace-tv-vX.Y.Z.img.xz` on every `v*` tag (and via workflow_dispatch). Download it from the GitHub Release and flash with Raspberry Pi Imager — no customisation.
+**To cut a new base image:** GitHub Actions builds two flash images on every `v*` tag (and via workflow_dispatch):
+
+- `adspace-tv-vX.Y.Z.img.xz` — **prod**: kiosk `https://screen.adspace.so`, no apt proxy
+- `adspace-tv-vX.Y.Z-dev.img.xz` — **dev**: kiosk `https://dev.adspace.live`, apt-cacher `http://192.168.10.106:3142`
+
+Download from the GitHub Release and flash with Raspberry Pi Imager — no customisation.
 
 Locally (macOS or Linux):
 ```bash
 ./embed.sh ~/Downloads/2026-06-18-raspios-trixie-arm64-lite.img images/adspace-tv-v0.1.9.img
 ```
 The official Lite image URL + SHA-256 are pinned in `.github/workflows/release.yml`. Bump both when Raspberry Pi publishes a new Lite image. CI sources `.env.example` during embed, so flash images join Headscale (`HEADSCALE_LOGIN_SERVER` / `HEADSCALE_AUTH_KEY`) instead of Tailscale.com.
+
+Optional: set `APT_PROXY=http://host:3142` and/or `ADSPACE_URL=https://dev.adspace.live` in `.env` so local `embed.sh` / `qemu-run.sh` images pick them up. Bootstrap writes `/etc/apt/apt.conf.d/01adspace-proxy` if the proxy is reachable; otherwise apt goes direct. The CI **dev** image bakes both in; the prod image does not.
 
 **There is no `provision.sh`, `flash.sh`, or `prepare-image.sh`.** Those are gone. `bootstrap.sh` is the single source of truth for what's on a Pi.
 
@@ -125,13 +132,13 @@ ssh pi@adspace-{serial} "sudo chmod +x /opt/adspace/watchdog.sh && sudo systemct
 ```
 
 ### Releasing a new version (frontend + API + flash image)
-Commit on `main` with message exactly `v1.2.3` (first line, nothing else). GitHub Actions creates the git tag and builds the Go API, frontend tarball, and flashable `.img.xz`.
+Commit on `main` with message exactly `v1.2.3` (first line, nothing else). GitHub Actions creates the git tag and builds the Go API, frontend tarball, and both flashable `.img.xz` files (prod + dev).
 
 Manual tag still works:
 ```bash
 git tag v1.2.3 && git push origin v1.2.3
 ```
-Newly provisioned Pis pull `wifi-setup-api` + `wifi-setup-dist.tar.gz` from the latest release. Existing Pis need `make deploy`. Flash new SD cards from `adspace-tv-v1.2.3.img.xz` on the same release.
+Newly provisioned Pis pull `wifi-setup-api` + `wifi-setup-dist.tar.gz` from the latest release. Existing Pis need `make deploy`. Flash new SD cards from `adspace-tv-v1.2.3.img.xz` (prod) or `adspace-tv-v1.2.3-dev.img.xz` (dev) on the same release.
 
 To rebuild only the image (e.g. after a `bootstrap.sh` fix) without a new tag: Actions → Release → Run workflow → optionally set `attach_to_release` to an existing tag.
 
@@ -262,7 +269,7 @@ ssh pi@adspace-{serial} "sudo /opt/adspace/bootstrap.sh"
 | `/opt/adspace/bootstrap.sh` | Full provisioning script — written by cloud-init via embed.sh |
 | `/opt/adspace/watchdog.sh` | Main control loop — do not edit in place, push from repo |
 | `/opt/adspace/start-display.sh` | Single display launcher — checks setup flag, starts correct Chromium |
-| `/opt/adspace/kiosk.env` | `ADSPACE_URL` env var |
+| `/opt/adspace/kiosk.env` | `ADSPACE_URL` env var — written by bootstrap (prod default `https://screen.adspace.so`) |
 | `/opt/adspace/wifi-setup-api` | Compiled Go binary, served on :3000 |
 | `/opt/adspace/wifi-setup/dist/` | Built React app, served by Caddy on :80 |
 | `/opt/adspace/wifi-setup/dist/config.json` | Runtime-written by watchdog — never deploy |
@@ -275,6 +282,8 @@ ssh pi@adspace-{serial} "sudo /opt/adspace/bootstrap.sh"
 | `/etc/adspace-bootstrap-done` | Flag: exists = bootstrap already ran, skip it |
 | `/tmp/adspace-setup-mode` | Flag: exists = setup mode, absent = kiosk mode |
 | `/tmp/adspace-wifi-scan.json` | WiFi scan cache from before hotspot started |
+| `/boot/firmware/adspace-apt.env` | Optional `APT_PROXY=` — baked into the CI **dev** image, not prod |
+| `/boot/firmware/adspace-kiosk.env` | Optional `ADSPACE_URL=` — baked into the CI **dev** image (`https://dev.adspace.live`) |
 
 ---
 

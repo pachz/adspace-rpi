@@ -35,6 +35,30 @@ for _f in /boot/firmware/adspace-tailnet.env /boot/adspace-tailnet.env; do
     break
 done
 
+# Optional apt-cacher-ng (embed.sh writes this from APT_PROXY). Dev flash
+# images bake in the office cacher; prod images leave this empty.
+APT_PROXY="${APT_PROXY:-}"
+for _f in /boot/firmware/adspace-apt.env /boot/adspace-apt.env; do
+    [[ -f "$_f" ]] || continue
+    # shellcheck disable=SC1090
+    source "$_f"
+    break
+done
+APT_PROXY="${APT_PROXY%/}"
+
+# Optional kiosk URL (embed.sh writes this from ADSPACE_URL). Prod default
+# is screen.adspace.so; the CI dev image sets https://dev.adspace.live.
+ADSPACE_URL="${ADSPACE_URL:-}"
+for _f in /boot/firmware/adspace-kiosk.env /boot/adspace-kiosk.env; do
+    [[ -f "$_f" ]] || continue
+    # shellcheck disable=SC1090
+    source "$_f"
+    break
+done
+ADSPACE_URL="${ADSPACE_URL:-https://screen.adspace.so}"
+[[ "$ADSPACE_URL" =~ ^https?://[^[:space:]]+$ ]] \
+    || die "Invalid ADSPACE_URL: $ADSPACE_URL"
+
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 log()  { echo -e "${GREEN}[bootstrap]${NC} $*"; logger -t adspace-bootstrap "$*"; }
 warn() { echo -e "${YELLOW}[bootstrap]${NC} $*" >&2; logger -t adspace-bootstrap "WARN: $*"; }
@@ -68,6 +92,24 @@ until curl -sf --max-time 5 https://github.com > /dev/null 2>&1; do
     sleep 10
 done
 log "Internet is up."
+
+# Optional LAN apt-cacher. Unreachable / invalid → apt goes direct (CI, venue).
+if [[ -n "${APT_PROXY:-}" ]]; then
+    if [[ "$APT_PROXY" =~ ^https?://[A-Za-z0-9._-]+(:[0-9]+)?/?$ ]]; then
+        if curl -sS --max-time 3 -o /dev/null "$APT_PROXY"; then
+            mkdir -p /etc/apt/apt.conf.d
+            cat > /etc/apt/apt.conf.d/01adspace-proxy << EOF
+Acquire::http::Proxy "${APT_PROXY}";
+Acquire::https::Proxy "DIRECT";
+EOF
+            log "Using apt proxy ${APT_PROXY}"
+        else
+            warn "APT_PROXY unreachable (${APT_PROXY}) — apt will go direct"
+        fi
+    else
+        warn "Ignoring invalid APT_PROXY: $APT_PROXY"
+    fi
+fi
 
 # ── 2. System packages ────────────────────────────────────────────────────────
 log "Installing packages..."
@@ -379,9 +421,10 @@ else
 fi
 EOF
 
-cat > /opt/adspace/kiosk.env << 'EOF'
-ADSPACE_URL="https://screen.adspace.so"
+cat > /opt/adspace/kiosk.env << EOF
+ADSPACE_URL="${ADSPACE_URL}"
 EOF
+log "Kiosk URL: $ADSPACE_URL"
 
 chmod +x /opt/adspace/watchdog.sh /opt/adspace/start-display.sh
 chown -R adspace:adspace /opt/adspace

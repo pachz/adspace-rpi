@@ -29,6 +29,14 @@
 #   Optional: HEADSCALE_LOGIN_SERVER + HEADSCALE_AUTH_KEY (env or .env)
 #   write adspace-tailnet.env onto the boot partition so bootstrap joins
 #   Headscale instead of Tailscale.com. CI sources .env.example for this.
+#
+#   Optional: APT_PROXY (env or .env) writes adspace-apt.env so bootstrap
+#   apt-get goes through a local apt-cacher-ng. The CI *dev* image sets
+#   this; the prod image does not.
+#
+#   Optional: ADSPACE_URL (env or .env) writes adspace-kiosk.env so the
+#   kiosk opens that URL. Default in bootstrap is https://screen.adspace.so.
+#   The CI *dev* image sets https://dev.adspace.live.
 # =============================================================================
 
 set -euo pipefail
@@ -302,8 +310,26 @@ EOF
     log "Headscale: image will join ${HEADSCALE_LOGIN_SERVER}"
 fi
 
+if [[ -n "${APT_PROXY:-}" ]]; then
+    cat > "$MOUNT_DIR/adspace-apt.env" << EOF
+APT_PROXY=${APT_PROXY}
+EOF
+    log "Apt proxy: ${APT_PROXY}"
+fi
+
+if [[ -n "${ADSPACE_URL:-}" ]]; then
+    [[ "$ADSPACE_URL" =~ ^https?://[^[:space:]]+$ ]] \
+        || die "Invalid ADSPACE_URL: $ADSPACE_URL"
+    cat > "$MOUNT_DIR/adspace-kiosk.env" << EOF
+ADSPACE_URL=${ADSPACE_URL}
+EOF
+    log "Kiosk URL: ${ADSPACE_URL}"
+fi
+
 log "Boot partition key files:"
-ls -lh "$MOUNT_DIR/user-data" "$MOUNT_DIR/meta-data" "$MOUNT_DIR/adspace-tailnet.env" 2>/dev/null || true
+ls -lh "$MOUNT_DIR/user-data" "$MOUNT_DIR/meta-data" \
+    "$MOUNT_DIR/adspace-tailnet.env" "$MOUNT_DIR/adspace-apt.env" \
+    "$MOUNT_DIR/adspace-kiosk.env" 2>/dev/null || true
 
 log "Unmounting..."
 
@@ -318,5 +344,5 @@ log "  On first boot (plug in ethernet):"
 log "    Boot 1: cloud-init runs — creates pi user, enables SSH,"
 log "            installs bootstrap.sh, starts adspace-bootstrap.service"
 log "    ~10 min: bootstrap installs everything, registers Tailscale"
-log "    After:   Kiosk is live at https://screen.adspace.so"
+log "    After:   Kiosk is live at ${ADSPACE_URL:-https://screen.adspace.so}"
 log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

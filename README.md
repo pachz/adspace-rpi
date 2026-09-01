@@ -107,7 +107,7 @@ rpi/
 │
 ├── .github/
 │   └── workflows/
-│       └── release.yml       # Auto-tags vx.x.x commits on main; builds API + frontend + .img.xz
+│       └── release.yml       # Auto-tags vx.x.x commits; builds API + frontend + prod/dev .img.xz
 │
 ├── wifi-setup/               # React frontend (TV page + phone setup page)
 │   ├── src/
@@ -169,13 +169,22 @@ rpi/
 
 ### Step 1 — Get the flash image
 
-**Preferred:** download `adspace-tv-vX.Y.Z.img.xz` from the [latest GitHub Release](https://github.com/pachz/adspace-rpi/releases/latest). Raspberry Pi Imager opens `.xz` directly. You only need one image — reuse it for every Pi.
+**Preferred:** download from the [latest GitHub Release](https://github.com/pachz/adspace-rpi/releases/latest). Raspberry Pi Imager opens `.xz` directly.
+
+- `adspace-tv-vX.Y.Z.img.xz` — **prod**: kiosk `https://screen.adspace.so`
+- `adspace-tv-vX.Y.Z-dev.img.xz` — **dev**: kiosk `https://dev.adspace.live`, office apt-cacher
 
 **Or build locally** (macOS or Linux) from a vanilla **Raspberry Pi OS Lite 64-bit (Trixie)** `.img`:
 ```bash
 ./embed.sh ~/Downloads/2026-06-18-raspios-trixie-arm64-lite.img images/adspace-tv-v0.1.9.img
 ```
 On Linux, `embed.sh` needs sudo (`losetup` / `mount`). On macOS it uses `hdiutil` (built in).
+
+For a local **dev** image, set these in `.env` then re-run `embed.sh`:
+```
+APT_PROXY=http://192.168.10.106:3142
+ADSPACE_URL=https://dev.adspace.live
+```
 
 ### Step 2 — Flash the image
 Open **Raspberry Pi Imager**:
@@ -190,7 +199,7 @@ Insert SD card, plug in ethernet, power on. Then:
 ```
 Boot 1 (~1 min):  cloud-init runs → creates pi user, enables SSH, starts adspace-bootstrap.service → reboots
 Boot 2 (~10 min): bootstrap.sh runs — installs packages, pulls app from GitHub Releases, registers Tailscale → reboots
-Boot 3:           Kiosk is live at https://screen.adspace.so
+Boot 3:           Kiosk is live (prod: screen.adspace.so / dev: dev.adspace.live)
 ```
 
 You can follow Boot 2 progress by SSH-ing in via LAN IP (find it on your router) with password `adspace`:
@@ -255,13 +264,13 @@ pnpm dev
 ```
 
 ### Releasing a new version
-Commit on `main` with message exactly `v1.2.3` — GitHub Actions creates the tag and builds the API, frontend, and flash image.
+Commit on `main` with message exactly `v1.2.3` — GitHub Actions creates the tag and builds the API, frontend, and both flash images (prod + dev).
 
 Or tag manually:
 ```bash
 git tag v1.2.3 && git push origin v1.2.3
 ```
-This publishes `wifi-setup-api` (arm64 binary), `wifi-setup-dist.tar.gz`, and `adspace-tv-v1.2.3.img.xz` to GitHub Releases. Newly provisioned Pis pull the latest release. Existing Pis need `make deploy`.
+This publishes `wifi-setup-api` (arm64 binary), `wifi-setup-dist.tar.gz`, `adspace-tv-v1.2.3.img.xz` (prod), and `adspace-tv-v1.2.3-dev.img.xz` (dev) to GitHub Releases. Newly provisioned Pis pull the latest release. Existing Pis need `make deploy`.
 
 ---
 
