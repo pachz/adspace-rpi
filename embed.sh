@@ -26,8 +26,9 @@
 #
 #   All files also placed on the boot partition so cloud-init can reference them.
 #
-# IDEMPOTENT: always starts fresh from the input image (unless input == output,
-# in which case it embeds in place — used by CI to save a 2.8G copy).
+#   Optional: HEADSCALE_LOGIN_SERVER + HEADSCALE_AUTH_KEY (env or .env)
+#   write adspace-tailnet.env onto the boot partition so bootstrap joins
+#   Headscale instead of Tailscale.com. CI sources .env.example for this.
 # =============================================================================
 
 set -euo pipefail
@@ -39,6 +40,12 @@ die()  { echo -e "${RED}[embed]${NC} ERROR: $*" >&2; exit 1; }
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OS="$(uname -s)"
+if [[ -f "${REPO_DIR}/.env" ]]; then
+    set -a
+    # shellcheck disable=SC1091
+    source "${REPO_DIR}/.env"
+    set +a
+fi
 
 # ── Credentials ───────────────────────────────────────────────────────────────
 PI_PASSWORD="adspace"
@@ -285,8 +292,18 @@ PYEOF
 
 log "user-data written ($(wc -l < "$MOUNT_DIR/user-data") lines)"
 
+if [[ -n "${HEADSCALE_LOGIN_SERVER:-}" ]]; then
+    [[ -n "${HEADSCALE_AUTH_KEY:-}" ]] \
+        || die "HEADSCALE_LOGIN_SERVER is set but HEADSCALE_AUTH_KEY is empty"
+    cat > "$MOUNT_DIR/adspace-tailnet.env" << EOF
+HEADSCALE_LOGIN_SERVER=${HEADSCALE_LOGIN_SERVER}
+HEADSCALE_AUTH_KEY=${HEADSCALE_AUTH_KEY}
+EOF
+    log "Headscale: image will join ${HEADSCALE_LOGIN_SERVER}"
+fi
+
 log "Boot partition key files:"
-ls -lh "$MOUNT_DIR/user-data" "$MOUNT_DIR/meta-data" 2>/dev/null || true
+ls -lh "$MOUNT_DIR/user-data" "$MOUNT_DIR/meta-data" "$MOUNT_DIR/adspace-tailnet.env" 2>/dev/null || true
 
 log "Unmounting..."
 

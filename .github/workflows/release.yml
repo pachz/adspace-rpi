@@ -185,6 +185,10 @@ jobs:
           mkdir -p images
           xz -T0 -dkc raspios.img.xz > "images/${IMG_NAME}.img"
           rm -f raspios.img.xz
+          set -a
+          # shellcheck disable=SC1091
+          source .env.example
+          set +a
           bash embed.sh "images/${IMG_NAME}.img" "images/${IMG_NAME}.img"
           xz -T0 "images/${IMG_NAME}.img"
           ls -lh "images/${IMG_NAME}.img.xz"

@@ -31,7 +31,7 @@ Locally (macOS or Linux):
 ```bash
 ./embed.sh ~/Downloads/2026-06-18-raspios-trixie-arm64-lite.img images/adspace-tv-v0.1.9.img
 ```
-The official Lite image URL + SHA-256 are pinned in `.github/workflows/release.yml`. Bump both when Raspberry Pi publishes a new Lite image.
+The official Lite image URL + SHA-256 are pinned in `.github/workflows/release.yml`. Bump both when Raspberry Pi publishes a new Lite image. CI sources `.env.example` during embed, so flash images join Headscale (`HEADSCALE_LOGIN_SERVER` / `HEADSCALE_AUTH_KEY`) instead of Tailscale.com.
 
 **There is no `provision.sh`, `flash.sh`, or `prepare-image.sh`.** Those are gone. `bootstrap.sh` is the single source of truth for what's on a Pi.
 
