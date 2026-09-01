@@ -100,8 +100,9 @@ rpi/
 ├── embed.sh                  # Injects bootstrap into vanilla RPi OS .img (macOS or Linux)
 ├── watchdog.sh               # Source copy of /opt/adspace/watchdog.sh (also embedded in bootstrap.sh)
 ├── start-display.sh          # Source copy of /opt/adspace/start-display.sh (also embedded in bootstrap.sh)
+├── indicate.sh               # Identify this Pi — blink ACT LED + flash hostname on the TV
 ├── kiosk.env                 # Source copy of /opt/adspace/kiosk.env
-├── Makefile                  # Root: embed, deploy, logs, screenshot, ssh targets
+├── Makefile                  # Root: embed, deploy, logs, screenshot, indicate, ssh targets
 ├── rename-device.sh          # Rename Pi after venue install
 ├── deprovision.sh            # Wipe all adspace config (for re-testing bootstrap)
 │
@@ -125,7 +126,7 @@ rpi/
     └── main.go               # GET /api/networks, POST /api/wifi
 ```
 
-> **Note:** `watchdog.sh` and `start-display.sh` are standalone files here for pushing updates to running Pis, but they are also embedded as heredocs inside `bootstrap.sh`. If you edit either, update both places.
+> **Note:** `watchdog.sh`, `start-display.sh`, and `indicate.sh` are standalone files here for pushing updates to running Pis, but they are also embedded as heredocs inside `bootstrap.sh`. If you edit any of them, update both places.
 
 ---
 
@@ -136,6 +137,7 @@ rpi/
 ├── bootstrap.sh              # Full provisioning script (written by cloud-init via embed.sh)
 ├── watchdog.sh               # Main control loop (run by systemd)
 ├── start-display.sh          # Launches Chromium — kiosk or setup mode based on flag
+├── indicate.sh               # Identify this Pi — blink ACT LED + flash hostname
 ├── kiosk.env                 # ADSPACE_URL env var
 ├── wifi-setup-api            # Compiled Go binary (serves :3000) — pulled from GitHub Releases
 └── wifi-setup/
@@ -248,6 +250,12 @@ make screenshot PI_SSH=pi@adspace-{serial}
 # Saves to /tmp/adspace-screen.png and opens in Preview on Mac
 ```
 
+### Identify which TV this Pi is
+```bash
+make indicate PI_SSH=pi@adspace-{serial}
+# ACT LED pulses; HDMI flashes the hostname for ~4 seconds (kiosk keeps running)
+```
+
 ### Open SSH session
 ```bash
 make ssh PI_SSH=pi@adspace-{serial}
@@ -264,9 +272,18 @@ pnpm dev
 ```
 
 ### Releasing a new version
-Commit on `main` with message exactly `v1.2.3` — GitHub Actions creates the tag and builds the API, frontend, and both flash images (prod + dev).
+Commit on `main` with first line exactly `v1.2.3`. The rest of the commit message is the GitHub Release changelog (auto-generated notes are appended):
 
-Or tag manually:
+```
+v1.2.3
+
+- Identify a Pi from the TV: ACT LED + hostname flash
+- CI images join Headscale instead of Tailscale.com
+```
+
+GitHub Actions creates the tag and builds the API, frontend, and both flash images (prod + dev).
+
+Or tag manually (notes are auto-generated only):
 ```bash
 git tag v1.2.3 && git push origin v1.2.3
 ```

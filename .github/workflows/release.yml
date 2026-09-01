@@ -125,15 +125,25 @@ jobs:
         working-directory: wifi-setup
         run: tar -czf ../wifi-setup-dist.tar.gz -C dist .
 
+      # First line of the version commit is vX.Y.Z; the rest is the changelog.
+      # Tag-only pushes have no commit body — notes.md is empty and GitHub
+      # still writes auto-generated notes.
+      - name: Write changelog from commit body
+        env:
+          MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          printf '%s\n' "$MESSAGE" | sed -e '1d' -e '1{/^[[:space:]]*$/d;}' > /tmp/release-notes.md
+
       # ── Create GitHub release with both artifacts ────────────────────────────
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
+          body_path: /tmp/release-notes.md
+          generate_release_notes: true
           files: |
             wifi-setup-api/wifi-setup-api
             wifi-setup-dist.tar.gz
-          generate_release_notes: true
 
   image:
     needs: [release]

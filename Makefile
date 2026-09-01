@@ -18,6 +18,7 @@
 # ── Diagnostics ───────────────────────────────────────────────────────────────
 #   make logs PI_SSH=pi@adspace-{serial}
 #   make screenshot PI_SSH=pi@adspace-{serial}
+#   make indicate PI_SSH=pi@adspace-{serial}   — blink ACT LED + flash hostname on the TV
 #   make ssh PI_SSH=pi@adspace-{serial}
 
 PI_SSH ?= $(error PI_SSH is required. Usage: make deploy PI_SSH=pi@adspace-{serial})
@@ -27,7 +28,7 @@ SSH  = ssh $(PI_SSH)
 SCP  = scp
 QEMU_IMG ?=
 
-.PHONY: embed deploy deploy-front deploy-api logs screenshot ssh qemu qemu-gui
+.PHONY: embed deploy deploy-front deploy-api logs screenshot indicate ssh qemu qemu-gui
 
 # ── Image prep ────────────────────────────────────────────────────────────────
 embed:
@@ -63,6 +64,9 @@ screenshot:
 	scp $(PI_SSH):/tmp/adspace-screen.png /tmp/adspace-screen.png
 	@echo "Saved to /tmp/adspace-screen.png"
 	open /tmp/adspace-screen.png
+
+indicate:
+	$(SSH) "sudo bash -s" < indicate.sh
 
 ssh:
 	$(SSH)

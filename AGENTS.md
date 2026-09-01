@@ -123,18 +123,30 @@ ssh pi@adspace-{serial} "sudo mv /tmp/wifi-setup-api-new /opt/adspace/wifi-setup
 ```
 
 ### Watchdog / shell scripts
-`watchdog.sh` and `start-display.sh` exist both as standalone files in the repo root AND as heredocs embedded inside `bootstrap.sh`. **If you edit either script, you must update both the standalone file and the embedded copy inside `bootstrap.sh`.** Freshly provisioned Pis get the embedded version.
+`watchdog.sh`, `start-display.sh`, and `indicate.sh` exist both as standalone files in the repo root AND as heredocs embedded inside `bootstrap.sh`. **If you edit any of them, you must update both the standalone file and the embedded copy inside `bootstrap.sh`.** Freshly provisioned Pis get the embedded version.
 
 Push the updated file to a running Pi:
 ```bash
 ssh pi@adspace-{serial} "sudo tee /opt/adspace/watchdog.sh" < watchdog.sh
 ssh pi@adspace-{serial} "sudo chmod +x /opt/adspace/watchdog.sh && sudo systemctl restart adspace-watchdog"
+
+ssh pi@adspace-{serial} "sudo tee /opt/adspace/indicate.sh" < indicate.sh
+ssh pi@adspace-{serial} "sudo chmod +x /opt/adspace/indicate.sh"
 ```
 
 ### Releasing a new version (frontend + API + flash image)
-Commit on `main` with message exactly `v1.2.3` (first line, nothing else). GitHub Actions creates the git tag and builds the Go API, frontend tarball, and both flashable `.img.xz` files (prod + dev).
+Commit on `main` with first line exactly `v1.2.3`. Anything after that becomes the GitHub Release changelog (GitHub also appends auto-generated notes):
 
-Manual tag still works:
+```
+v1.2.3
+
+- Identify a Pi from the TV: ACT LED + hostname flash
+- CI images join Headscale instead of Tailscale.com
+```
+
+GitHub Actions creates the git tag and builds the Go API, frontend tarball, and both flashable `.img.xz` files (prod + dev).
+
+Manual tag still works (no commit body — release notes are auto-generated only):
 ```bash
 git tag v1.2.3 && git push origin v1.2.3
 ```
@@ -239,7 +251,7 @@ dtparam=hdmi_force_hotplug=1
 4. Fixes boot config (HDMI for Pi 5)
 5. Creates users: `adspace`, `pi` (sudoers), `aiagent` (sudoers + SSH key)
 6. Configures tty1 autologin
-7. Writes all scripts to `/opt/adspace/`: `watchdog.sh`, `start-display.sh`, `kiosk.env`
+7. Writes all scripts to `/opt/adspace/`: `watchdog.sh`, `start-display.sh`, `indicate.sh`, `kiosk.env`
 8. Writes `/etc/pam.d/cage`
 9. Writes `/etc/caddy/Caddyfile`
 10. Installs all systemd units: `adspace-kiosk`, `adspace-watchdog`, `adspace-setup-api`
@@ -269,6 +281,7 @@ ssh pi@adspace-{serial} "sudo /opt/adspace/bootstrap.sh"
 | `/opt/adspace/bootstrap.sh` | Full provisioning script — written by cloud-init via embed.sh |
 | `/opt/adspace/watchdog.sh` | Main control loop — do not edit in place, push from repo |
 | `/opt/adspace/start-display.sh` | Single display launcher — checks setup flag, starts correct Chromium |
+| `/opt/adspace/indicate.sh` | Identify this Pi — blink ACT LED + flash hostname on the HDMI display |
 | `/opt/adspace/kiosk.env` | `ADSPACE_URL` env var — written by bootstrap (prod default `https://screen.adspace.so`) |
 | `/opt/adspace/wifi-setup-api` | Compiled Go binary, served on :3000 |
 | `/opt/adspace/wifi-setup/dist/` | Built React app, served by Caddy on :80 |
@@ -401,6 +414,12 @@ make screenshot PI_SSH=pi@adspace-{serial}
 # Saves to /tmp/adspace-screen.png and opens in Preview on Mac
 ```
 
+### Identify which TV this Pi is
+```bash
+make indicate PI_SSH=pi@adspace-{serial}
+# ACT LED pulses and the HDMI screen flashes the hostname for ~4s
+```
+
 ### Check WiFi scan cache
 ```bash
 ssh pi@adspace-{serial} "cat /tmp/adspace-wifi-scan.json"
@@ -454,7 +473,7 @@ ssh pi@adspace-{serial} "ss -tlnp | grep 3000"
 | Missing `Conflicts=getty@tty1.service` | getty respawns bash on tty1 after cage exits → HUP kills next cage start |
 | Checking NM connection profile state for connectivity | Profiles stay `activated` even with cable unplugged — use `nmcli networking connectivity` |
 | Using legacy `hdmi_force_hotplug=1` in config.txt | Silently ignored on Pi 5 — use `dtparam=hdmi_force_hotplug=1` under `[all]` |
-| Editing watchdog.sh without updating bootstrap.sh | Newly provisioned Pis get the old embedded version from bootstrap.sh |
+| Editing watchdog.sh / start-display.sh / indicate.sh without updating bootstrap.sh | Newly provisioned Pis get the old embedded version from bootstrap.sh |
 | Uploading an uncompressed `.img` to GitHub Releases | File limit is 2 GB; Lite is ~2.8 GB — always publish `.img.xz` |
 | Using unquoted heredoc in embed.sh | Bash expands `$VAR`/`$()` inside bootstrap.sh content → file written as 0 bytes; use Python or quoted `<< 'DELIM'` with no expansions needed |
 | Inline Caddyfile handle blocks | `handle /path { ... }` on one line is rejected by Caddy 2.6.2 — always use multiline blocks |
