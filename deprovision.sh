@@ -77,6 +77,9 @@ userdel -r adspace 2>/dev/null || warn "adspace user not found or already remove
 log "Removing PAM cage config..."
 rm -f /etc/pam.d/cage
 
+log "Removing invisible cursor theme..."
+rm -rf /usr/share/icons/AdspaceBlank
+
 log "Removing sudoers entries..."
 rm -f /etc/sudoers.d/adspace
 rm -f /etc/sudoers.d/aiagent

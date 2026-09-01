@@ -120,8 +120,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
     xwayland \
     caddy \
     network-manager \
-    unclutter \
-    unclutter-xfixes \
+    python3 \
     curl \
     rsync \
     dnsmasq-base \
@@ -136,6 +135,116 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y cage
 
 # Remove labwc — conflicts with cage on Pi 5
 DEBIAN_FRONTEND=noninteractive apt-get remove -y labwc 2>/dev/null || true
+
+# Cage draws the pointer itself. Hide it with a fully-transparent Xcursor theme
+# (unclutter is X11-only; labwc HideCursor does not exist in cage).
+#
+# Packaged cage (0.1.x) ignores XCURSOR_THEME and loads the theme named
+# "default". wlroots does not follow index.theme Inherits= — if
+# default/cursors/ is empty it loads a *built-in visible arrow*. The blank
+# files must live in default/cursors/, not only in a named theme.
+log "Installing invisible cursor theme..."
+python3 - << 'PY'
+import os, struct
+
+theme = "/usr/share/icons/AdspaceBlank"
+cdir = os.path.join(theme, "cursors")
+os.makedirs(cdir, exist_ok=True)
+
+size = 24
+pixels = b"\x00" * (size * size * 4)
+image_type = 0xFFFD0002
+header_len, toc_len, image_header_len, ntoc = 16, 12, 36, 1
+image_pos = header_len + toc_len * ntoc
+
+buf = bytearray()
+buf += b"Xcur"
+buf += struct.pack("<III", header_len, 0x00010000, ntoc)
+buf += struct.pack("<III", image_type, size, image_pos)
+buf += struct.pack(
+    "<IIIIIIIII",
+    image_header_len, image_type, size, 1,
+    size, size, 0, 0, 0,
+)
+buf += pixels
+
+left_ptr = os.path.join(cdir, "left_ptr")
+with open(left_ptr, "wb") as f:
+    f.write(buf)
+
+names = (
+    "default", "arrow", "top_left_arrow", "left_arrow", "pointer",
+    "hand", "hand1", "hand2", "grab", "grabbing", "openhand", "closedhand",
+    "text", "xterm", "vertical-text", "crosshair", "cross", "tcross", "plus",
+    "cell", "move", "all-scroll", "fleur", "size_all",
+    "not-allowed", "no-drop", "crossed_circle", "pirate",
+    "wait", "watch", "left_ptr_watch", "progress",
+    "help", "question_arrow", "context-menu",
+    "alias", "copy", "link", "dnd-copy", "dnd-move", "dnd-link",
+    "dnd-none", "dnd-no-drop", "color-picker", "pencil", "draft",
+    "zoom-in", "zoom-out",
+    "col-resize", "row-resize", "n-resize", "e-resize", "s-resize", "w-resize",
+    "ne-resize", "nw-resize", "se-resize", "sw-resize",
+    "ew-resize", "ns-resize", "nesw-resize", "nwse-resize",
+    "sb_h_double_arrow", "sb_v_double_arrow",
+    "sb_up_arrow", "sb_down_arrow", "sb_left_arrow", "sb_right_arrow",
+    "split_h", "split_v", "size_hor", "size_ver", "size_fdiag", "size_bdiag",
+    "top_side", "bottom_side", "left_side", "right_side",
+    "top_left_corner", "top_right_corner",
+    "bottom_left_corner", "bottom_right_corner",
+    "up_arrow", "center_ptr", "right_ptr",
+)
+for name in names:
+    dest = os.path.join(cdir, name)
+    if os.path.lexists(dest):
+        os.remove(dest)
+    os.symlink("left_ptr", dest)
+PY
+
+cat > /usr/share/icons/AdspaceBlank/index.theme << 'EOF'
+[Icon Theme]
+Name=AdspaceBlank
+Comment=Invisible cursor for AdSpace kiosk
+EOF
+
+if [ -L /usr/share/icons/default ]; then
+    rm /usr/share/icons/default
+fi
+mkdir -p /usr/share/icons/default
+rm -rf /usr/share/icons/default/cursors
+cp -a /usr/share/icons/AdspaceBlank/cursors /usr/share/icons/default/cursors
+cat > /usr/share/icons/default/index.theme << 'EOF'
+[Icon Theme]
+Name=Default
+Comment=Default cursor theme
+Inherits=AdspaceBlank
+EOF
+# Overlay Adwaita too if present — some clients load it by name.
+if [ -d /usr/share/icons/Adwaita/cursors ]; then
+    cp -a /usr/share/icons/AdspaceBlank/cursors/. /usr/share/icons/Adwaita/cursors/
+fi
+
+# Chromium uploads its own cursor bitmap via wl_pointer.set_cursor, bypassing
+# the compositor theme. Inject cursor:none so it requests a hidden pointer.
+mkdir -p /opt/adspace/hide-cursor
+cat > /opt/adspace/hide-cursor/manifest.json << 'EOF'
+{
+  "manifest_version": 3,
+  "name": "AdSpace hide cursor",
+  "version": "1.0",
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "all_frames": true,
+      "run_at": "document_start",
+      "css": ["hide-cursor.css"]
+    }
+  ]
+}
+EOF
+cat > /opt/adspace/hide-cursor/hide-cursor.css << 'EOF'
+html, body, *, *::before, *::after { cursor: none !important; }
+EOF
 
 # ── 3. NetworkManager ─────────────────────────────────────────────────────────
 log "Configuring NetworkManager..."
@@ -400,6 +509,7 @@ if [ -f /tmp/adspace-setup-mode ]; then
         --overscroll-history-navigation=0 \
         --password-store=basic \
         --disk-cache-size=1 \
+        --load-extension=/opt/adspace/hide-cursor \
         --user-data-dir=/home/adspace/.config/adspace-setup-chromium \
         "http://localhost/tv"
 else
@@ -416,6 +526,7 @@ else
         --disable-pinch \
         --overscroll-history-navigation=0 \
         --password-store=basic \
+        --load-extension=/opt/adspace/hide-cursor \
         --user-data-dir=/home/adspace/.config/adspace-chromium \
         "$ADSPACE_URL"
 fi
@@ -514,6 +625,8 @@ WorkingDirectory=/home/adspace
 Environment=XDG_SESSION_TYPE=wayland
 Environment=WLR_RENDERER=gles2
 Environment=WLR_DRM_DEVICES=/dev/dri/card1
+Environment=XCURSOR_THEME=AdspaceBlank
+Environment=XCURSOR_SIZE=24
 
 ExecStartPre=/bin/sh -c 'until [ -e /dev/dri/card1 ]; do sleep 0.5; done'
 ExecStartPre=/bin/sh -c 'uid=$(id -u adspace); mkdir -p /run/user/$uid; chmod 700 /run/user/$uid; chown adspace:adspace /run/user/$uid; rm -f /run/user/$uid/wayland-*'

@@ -26,6 +26,7 @@ if [ -f /tmp/adspace-setup-mode ]; then
         --overscroll-history-navigation=0 \
         --password-store=basic \
         --disk-cache-size=1 \
+        --load-extension=/opt/adspace/hide-cursor \
         --user-data-dir=/home/adspace/.config/adspace-setup-chromium \
         "http://localhost/tv"
 else
@@ -42,6 +43,7 @@ else
         --disable-pinch \
         --overscroll-history-navigation=0 \
         --password-store=basic \
+        --load-extension=/opt/adspace/hide-cursor \
         --user-data-dir=/home/adspace/.config/adspace-chromium \
         "$ADSPACE_URL"
 fi
