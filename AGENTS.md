@@ -222,7 +222,7 @@ If `adspace-kiosk` is enabled at boot AND `Restart=always`, it starts itself bef
 `Conflicts=getty@tty1.service` in `adspace-kiosk.service` ensures systemd stops the getty autologin session before cage starts. Without it, when cage exits, `TTYVHangup=yes` hangs up tty1, getty respawns and autologins `adspace` with a bash shell on tty1, and the next cage start gets HUP'd from tty1 being held.
 
 ### 12. Call chromium binary directly, not the wrapper
-Use `/usr/lib/chromium/chromium`, not `/usr/bin/chromium`. The RPi wrapper (`rpi-chromium-mods`) injects `--js-flags=--no-decommit-pooled-pages` which is unsupported on this Chromium version and causes an immediate crash. Pass `--user-agent` from `/opt/adspace/chromium-ua` (written at bootstrap after chromium install). Do not invent a UA — dump Chromium's real one and append ` AdspaceTV/rpi-<tag>`.
+Use `/usr/lib/chromium/chromium`, not `/usr/bin/chromium`. The RPi wrapper (`rpi-chromium-mods`) injects `--js-flags=--no-decommit-pooled-pages` which is unsupported on this Chromium version and causes an immediate crash. Pass `--user-agent` from `/opt/adspace/chromium-ua` (written at bootstrap after chromium install). Do not invent a UA — dump Chromium's real one and append ` AdspaceTV/rpi-<tag>`. Keep `--disable-features=TranslateUI,LocalNetworkAccessChecks,PrivateNetworkAccessRestrictions` so the HTTPS kiosk page can call the localhost device-info API.
 
 ### 13. cage requires libwlroots-0.18 (RPi build)
 Must use `libwlroots-0.18=0.18.2-3+rpt4+b1` (RPi build). The Debian build of wlroots-0.18 fails with `EGL_BAD_PARAMETER` on Pi 5 GPU. libwlroots-0.19 (used by labwc) causes SEGV on mode switch. Both can coexist but cage must link against 0.18.

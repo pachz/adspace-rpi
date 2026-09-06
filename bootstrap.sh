@@ -555,7 +555,7 @@ if [ -f /tmp/adspace-setup-mode ]; then
         --noerrdialogs \
         --disable-infobars \
         --disable-session-crashed-bubble \
-        --disable-features=TranslateUI \
+        --disable-features=TranslateUI,LocalNetworkAccessChecks,PrivateNetworkAccessRestrictions \
         --disable-pinch \
         --overscroll-history-navigation=0 \
         --password-store=basic \
@@ -574,7 +574,7 @@ else
         --noerrdialogs \
         --disable-infobars \
         --disable-session-crashed-bubble \
-        --disable-features=TranslateUI \
+        --disable-features=TranslateUI,LocalNetworkAccessChecks,PrivateNetworkAccessRestrictions \
         --disable-pinch \
         --overscroll-history-navigation=0 \
         --password-store=basic \
