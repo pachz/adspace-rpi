@@ -1070,7 +1070,12 @@ fi
 # ── 15. Tailscale / Headscale ─────────────────────────────────────────────────
 if ! command -v tailscale &>/dev/null; then
     log "Installing Tailscale client..."
-    curl -fsSL https://tailscale.com/install.sh | sh
+    if [[ -x /opt/adspace/tailscale-install.sh ]]; then
+        sh /opt/adspace/tailscale-install.sh
+    else
+        warn "Bundled Tailscale installer missing — fetching from tailscale.com"
+        curl -fsSL https://tailscale.com/install.sh | sh
+    fi
 fi
 
 # Stop the package's first start — on QEMU it crash-loops (no kernel

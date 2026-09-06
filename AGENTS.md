@@ -259,7 +259,7 @@ dtparam=hdmi_force_hotplug=1
 12. Sets hostname from CPU serial
 13. Sets WiFi country (AE), unblocks rfkill
 14. Creates hotspot nmcli profile
-15. Installs and registers Tailscale
+15. Installs Tailscale via the bundled `/opt/adspace/tailscale-install.sh` (vendored official installer; falls back to curl if missing) and registers the device
 16. Pulls `wifi-setup-api` binary + `wifi-setup-dist.tar.gz` from latest GitHub Release
 17. Touches `/etc/adspace-bootstrap-done`, reboots
 
@@ -279,6 +279,7 @@ ssh pi@adspace-{serial} "sudo /opt/adspace/bootstrap.sh"
 | Path | Purpose |
 |------|---------|
 | `/opt/adspace/bootstrap.sh` | Full provisioning script — written by cloud-init via embed.sh |
+| `/opt/adspace/tailscale-install.sh` | Official Tailscale installer — vendored in the repo, baked into the image by `embed.sh` |
 | `/opt/adspace/watchdog.sh` | Main control loop — do not edit in place, push from repo |
 | `/opt/adspace/start-display.sh` | Single display launcher — checks setup flag, starts correct Chromium |
 | `/opt/adspace/indicate.sh` | Identify this Pi — blink ACT LED + flash hostname on the HDMI display |

@@ -326,6 +326,32 @@ header = (
 ud_path.write_text(ud[:i] + header + body + "\n\n" + ud[j:])
 print("refreshed bootstrap.sh in user-data")
 PY
+    python3 - "$QEMU_MNT/user-data" "${REPO_DIR}/tailscale-install.sh" << 'PY'
+from pathlib import Path
+import sys
+ud_path, src_path = Path(sys.argv[1]), Path(sys.argv[2])
+ud = ud_path.read_text()
+src = src_path.read_text()
+start = "  - path: /opt/adspace/tailscale-install.sh"
+end = "\n# Enable SSH and bootstrap service\n"
+i, j = ud.find(start), ud.find(end)
+if i < 0 or j < 0 or j <= i:
+    print("user-data has no tailscale-install.sh block — skip refresh (re-embed to add it)")
+else:
+    indent = "      "
+    body = "\n".join(
+        (indent + line) if line else indent.rstrip()
+        for line in src.splitlines()
+    )
+    header = (
+        "  - path: /opt/adspace/tailscale-install.sh\n"
+        "    permissions: '0755'\n"
+        "    owner: root:root\n"
+        "    content: |\n"
+    )
+    ud_path.write_text(ud[:i] + header + body + "\n" + ud[j:])
+    print("refreshed tailscale-install.sh in user-data")
+PY
     if [[ -n "${HEADSCALE_LOGIN_SERVER:-}" ]]; then
         [[ -n "${HEADSCALE_AUTH_KEY:-}" ]] \
             || die "HEADSCALE_LOGIN_SERVER is set but HEADSCALE_AUTH_KEY is empty"

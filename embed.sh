@@ -2,7 +2,8 @@
 # =============================================================================
 # AdSpace RPi — Embed Script
 # =============================================================================
-# Injects bootstrap.sh + adspace-bootstrap.service into a vanilla
+# Injects bootstrap.sh, adspace-bootstrap.service, and the vendored
+# Tailscale installer into a vanilla
 # Raspberry Pi OS Lite 64-bit .img file so it self-provisions on first boot.
 #
 # USAGE:
@@ -20,7 +21,7 @@
 #   mechanism). We replace user-data with a cloud-init config that:
 #     - Creates the pi user with a known password
 #     - Enables SSH with password authentication
-#     - Copies bootstrap.sh into /opt/adspace/ via write_files
+#     - Copies bootstrap.sh + tailscale-install.sh into /opt/adspace/ via write_files
 #     - Installs and enables adspace-bootstrap.service via write_files
 #     - Runs bootstrap.sh on first boot via runcmd
 #
@@ -71,6 +72,8 @@ OUTPUT_IMG="${2:-${REPO_DIR}/images/adspace-tv.img}"
     || die "bootstrap.sh not found in repo root"
 [[ -f "$REPO_DIR/adspace-bootstrap.service" ]] \
     || die "adspace-bootstrap.service not found in repo root"
+[[ -f "$REPO_DIR/tailscale-install.sh" ]] \
+    || die "tailscale-install.sh not found in repo root"
 [[ "$OS" == "Darwin" || "$OS" == "Linux" ]] \
     || die "Unsupported OS: $OS (need macOS or Linux)"
 
@@ -244,14 +247,16 @@ HASHED=$(hash_password "$PI_PASSWORD")
 log "Writing cloud-init user-data..."
 python3 - "$REPO_DIR/bootstrap.sh" \
           "$REPO_DIR/adspace-bootstrap.service" \
+          "$REPO_DIR/tailscale-install.sh" \
           "$MOUNT_DIR/user-data" \
           "$HASHED" << 'PYEOF'
 import sys, textwrap
 
-bootstrap_path, service_path, out_path, hashed = sys.argv[1:]
+bootstrap_path, service_path, ts_install_path, out_path, hashed = sys.argv[1:]
 
 bootstrap = open(bootstrap_path).read()
 service   = open(service_path).read()
+ts_install = open(ts_install_path).read()
 
 def indent(text, spaces=6):
     pad = ' ' * spaces
@@ -289,6 +294,12 @@ write_files:
     owner: root:root
     content: |
 {indent(service)}
+
+  - path: /opt/adspace/tailscale-install.sh
+    permissions: '0755'
+    owner: root:root
+    content: |
+{indent(ts_install)}
 
 # Enable SSH and bootstrap service
 runcmd:
