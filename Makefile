@@ -16,6 +16,7 @@
 #   make deploy-api PI_SSH=pi@adspace-{serial}     — API binary only
 #
 # ── Diagnostics ───────────────────────────────────────────────────────────────
+#   make deploy-info PI_SSH=pi@adspace-{serial}  — device-info.py (localhost:7224)
 #   make logs PI_SSH=pi@adspace-{serial}
 #   make screenshot PI_SSH=pi@adspace-{serial}
 #   make indicate PI_SSH=pi@adspace-{serial}   — blink ACT LED + flash hostname on the TV
@@ -28,7 +29,7 @@ SSH  = ssh $(PI_SSH)
 SCP  = scp
 QEMU_IMG ?=
 
-.PHONY: embed deploy deploy-front deploy-api logs screenshot indicate ssh qemu qemu-gui
+.PHONY: embed deploy deploy-front deploy-api deploy-info logs screenshot indicate ssh qemu qemu-gui
 
 # ── Image prep ────────────────────────────────────────────────────────────────
 embed:
@@ -55,9 +56,35 @@ deploy-api:
 	     && sudo chmod +x /opt/adspace/wifi-setup-api \
 	     && sudo systemctl start adspace-setup-api.service || true"
 
+deploy-info:
+	$(SCP) device-info.py $(PI_SSH):/tmp/device-info.py
+	$(SSH) "sudo mv /tmp/device-info.py /opt/adspace/device-info.py \
+	     && sudo chown adspace:adspace /opt/adspace/device-info.py \
+	     && sudo chmod +x /opt/adspace/device-info.py \
+	     && printf '%s\n' \
+	        '[Unit]' \
+	        'Description=AdSpace Device Info API' \
+	        'After=network.target' \
+	        '' \
+	        '[Service]' \
+	        'Type=simple' \
+	        'User=adspace' \
+	        'ExecStart=/usr/bin/python3 /opt/adspace/device-info.py' \
+	        'Restart=always' \
+	        'RestartSec=3' \
+	        'StandardOutput=journal' \
+	        'StandardError=journal' \
+	        '' \
+	        '[Install]' \
+	        'WantedBy=multi-user.target' \
+	        | sudo tee /etc/systemd/system/adspace-info.service >/dev/null \
+	     && sudo systemctl daemon-reload \
+	     && sudo systemctl enable --now adspace-info.service \
+	     && sudo systemctl restart adspace-info.service"
+
 # ── Diagnostics ───────────────────────────────────────────────────────────────
 logs:
-	$(SSH) "sudo journalctl -u adspace-watchdog -u adspace-kiosk -u adspace-setup-api -u adspace-bootstrap -f"
+	$(SSH) "sudo journalctl -u adspace-watchdog -u adspace-kiosk -u adspace-setup-api -u adspace-info -u adspace-bootstrap -f"
 
 screenshot:
 	$(SSH) "sudo -u adspace sh -c 'WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1001 grim /tmp/adspace-screen.png'"

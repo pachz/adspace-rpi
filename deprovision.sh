@@ -29,18 +29,21 @@ log "Stopping services..."
 systemctl stop adspace-watchdog.service  2>/dev/null || true
 systemctl stop adspace-kiosk.service     2>/dev/null || true
 systemctl stop adspace-setup-api.service 2>/dev/null || true
+systemctl stop adspace-info.service      2>/dev/null || true
 systemctl stop caddy.service             2>/dev/null || true
 
 log "Disabling services..."
 systemctl disable adspace-watchdog.service   2>/dev/null || true
 systemctl disable adspace-kiosk.service      2>/dev/null || true
 systemctl disable adspace-setup-api.service  2>/dev/null || true
+systemctl disable adspace-info.service       2>/dev/null || true
 systemctl disable adspace-bootstrap.service  2>/dev/null || true
 
 log "Removing systemd units..."
 rm -f /etc/systemd/system/adspace-watchdog.service
 rm -f /etc/systemd/system/adspace-kiosk.service
 rm -f /etc/systemd/system/adspace-setup-api.service
+rm -f /etc/systemd/system/adspace-info.service
 rm -f /etc/systemd/system/adspace-bootstrap.service
 rm -f /etc/systemd/system/getty@tty1.service.d/autologin.conf
 rmdir /etc/systemd/system/getty@tty1.service.d 2>/dev/null || true

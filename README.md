@@ -101,6 +101,7 @@ rpi/
 ├── watchdog.sh               # Source copy of /opt/adspace/watchdog.sh (also embedded in bootstrap.sh)
 ├── start-display.sh          # Source copy of /opt/adspace/start-display.sh (also embedded in bootstrap.sh)
 ├── indicate.sh               # Identify this Pi — blink ACT LED + flash hostname on the TV
+├── device-info.py            # Always-on localhost:7224 API — version + CPU serial
 ├── kiosk.env                 # Source copy of /opt/adspace/kiosk.env
 ├── Makefile                  # Root: embed, deploy, logs, screenshot, indicate, ssh targets
 ├── rename-device.sh          # Rename Pi after venue install
@@ -126,7 +127,7 @@ rpi/
     └── main.go               # GET /api/networks, POST /api/wifi
 ```
 
-> **Note:** `watchdog.sh`, `start-display.sh`, and `indicate.sh` are standalone files here for pushing updates to running Pis, but they are also embedded as heredocs inside `bootstrap.sh`. If you edit any of them, update both places.
+> **Note:** `watchdog.sh`, `start-display.sh`, `indicate.sh`, and `device-info.py` are standalone files here for pushing updates to running Pis, but they are also embedded as heredocs inside `bootstrap.sh`. If you edit any of them, update both places.
 
 ---
 
@@ -138,6 +139,7 @@ rpi/
 ├── watchdog.sh               # Main control loop (run by systemd)
 ├── start-display.sh          # Launches Chromium — kiosk or setup mode based on flag
 ├── indicate.sh               # Identify this Pi — blink ACT LED + flash hostname
+├── device-info.py            # Always-on localhost:7224 API — version + CPU serial
 ├── kiosk.env                 # ADSPACE_URL env var
 ├── wifi-setup-api            # Compiled Go binary (serves :3000) — pulled from GitHub Releases
 └── wifi-setup/
@@ -152,7 +154,8 @@ rpi/
 ├── adspace-bootstrap.service # One-shot, Boot 2 only, guarded by /etc/adspace-bootstrap-done
 ├── adspace-watchdog.service  # Starts on boot, controls everything else
 ├── adspace-kiosk.service     # cage Wayland session on tty1, boot-disabled
-└── adspace-setup-api.service # Go API, started by watchdog only
+├── adspace-setup-api.service # Go API, started by watchdog only
+└── adspace-info.service      # Device info API on 127.0.0.1:7224, enabled at boot
 
 /etc/adspace-bootstrap-done   # Flag file — exists = bootstrap already ran, skip it
 /tmp/adspace-setup-mode       # Flag file — exists = setup mode, absent = kiosk

@@ -123,7 +123,7 @@ ssh pi@adspace-{serial} "sudo mv /tmp/wifi-setup-api-new /opt/adspace/wifi-setup
 ```
 
 ### Watchdog / shell scripts
-`watchdog.sh`, `start-display.sh`, and `indicate.sh` exist both as standalone files in the repo root AND as heredocs embedded inside `bootstrap.sh`. **If you edit any of them, you must update both the standalone file and the embedded copy inside `bootstrap.sh`.** Freshly provisioned Pis get the embedded version.
+`watchdog.sh`, `start-display.sh`, `indicate.sh`, and `device-info.py` exist both as standalone files in the repo root AND as heredocs embedded inside `bootstrap.sh`. **If you edit any of them, you must update both the standalone file and the embedded copy inside `bootstrap.sh`.** Freshly provisioned Pis get the embedded version.
 
 Push the updated file to a running Pi:
 ```bash
@@ -132,6 +132,8 @@ ssh pi@adspace-{serial} "sudo chmod +x /opt/adspace/watchdog.sh && sudo systemct
 
 ssh pi@adspace-{serial} "sudo tee /opt/adspace/indicate.sh" < indicate.sh
 ssh pi@adspace-{serial} "sudo chmod +x /opt/adspace/indicate.sh"
+
+make deploy-info PI_SSH=pi@adspace-{serial}
 ```
 
 ### Releasing a new version (frontend + API + flash image)
@@ -237,7 +239,7 @@ dtparam=hdmi_force_hotplug=1
 `bootstrap.sh` removes legacy settings and writes the correct one. Do not reintroduce the legacy settings.
 
 ### 16. bootstrap.sh and standalone scripts must stay in sync
-`watchdog.sh` and `start-display.sh` are embedded as heredocs inside `bootstrap.sh` (steps 7). The standalone files in the repo root are used for pushing updates to running Pis. **Both must be updated together.** Freshly provisioned Pis get the bootstrap-embedded version.
+`watchdog.sh`, `start-display.sh`, `indicate.sh`, and `device-info.py` are embedded as heredocs inside `bootstrap.sh` (steps 7). The standalone files in the repo root are used for pushing updates to running Pis. **Both must be updated together.** Freshly provisioned Pis get the bootstrap-embedded version.
 
 ---
 
@@ -251,10 +253,10 @@ dtparam=hdmi_force_hotplug=1
 4. Fixes boot config (HDMI for Pi 5)
 5. Creates users: `adspace`, `pi` (sudoers), `aiagent` (sudoers + SSH key)
 6. Configures tty1 autologin
-7. Writes all scripts to `/opt/adspace/`: `watchdog.sh`, `start-display.sh`, `indicate.sh`, `kiosk.env`
+7. Writes all scripts to `/opt/adspace/`: `watchdog.sh`, `start-display.sh`, `indicate.sh`, `device-info.py`, `kiosk.env`
 8. Writes `/etc/pam.d/cage`
 9. Writes `/etc/caddy/Caddyfile`
-10. Installs all systemd units: `adspace-kiosk`, `adspace-watchdog`, `adspace-setup-api`
+10. Installs all systemd units: `adspace-kiosk`, `adspace-watchdog`, `adspace-setup-api`, `adspace-info` (enabled at boot)
 11. Disables cloud-init
 12. Sets hostname from CPU serial
 13. Sets WiFi country (AE), unblocks rfkill
@@ -283,6 +285,7 @@ ssh pi@adspace-{serial} "sudo /opt/adspace/bootstrap.sh"
 | `/opt/adspace/watchdog.sh` | Main control loop — do not edit in place, push from repo |
 | `/opt/adspace/start-display.sh` | Single display launcher — checks setup flag, starts correct Chromium |
 | `/opt/adspace/indicate.sh` | Identify this Pi — blink ACT LED + flash hostname on the HDMI display |
+| `/opt/adspace/device-info.py` | Always-on localhost:7224 API — version, CPU serial, hostname |
 | `/opt/adspace/kiosk.env` | `ADSPACE_URL` env var — written by bootstrap (prod default `https://screen.adspace.so`) |
 | `/opt/adspace/chromium-ua` | Full Chromium `--user-agent` string — written by bootstrap after chromium install |
 | `/opt/adspace/version` | Release token used in the UA (`1.2.3` from tag `v1.2.3`) |
@@ -295,6 +298,7 @@ ssh pi@adspace-{serial} "sudo /opt/adspace/bootstrap.sh"
 | `/etc/systemd/system/adspace-watchdog.service` | Starts on boot (every boot after bootstrap) |
 | `/etc/systemd/system/adspace-kiosk.service` | cage Wayland session on tty1, boot-disabled |
 | `/etc/systemd/system/adspace-setup-api.service` | Go API, started by watchdog only |
+| `/etc/systemd/system/adspace-info.service` | Device info API on 127.0.0.1:7224, enabled at boot |
 | `/etc/adspace-bootstrap-done` | Flag: exists = bootstrap already ran, skip it |
 | `/tmp/adspace-setup-mode` | Flag: exists = setup mode, absent = kiosk mode |
 | `/tmp/adspace-wifi-scan.json` | WiFi scan cache from before hotspot started |
@@ -339,6 +343,7 @@ ssh pi@adspace-{serial} "sudo /opt/adspace/bootstrap.sh"
 ```
 systemd boot
     ├── adspace-bootstrap.service  (Boot 2 only — full provisioning, then reboots)
+    ├── adspace-info.service       (every boot — device info on 127.0.0.1:7224)
     └── adspace-watchdog.service   (every boot after bootstrap, controls everything)
             ├── adspace-kiosk.service     (watchdog: systemctl restart)
             ├── adspace-setup-api.service (watchdog: systemctl start/stop)
@@ -355,7 +360,27 @@ adspace-kiosk.service
 
 ## API reference
 
-Both endpoints are served by the Go binary on `:3000`, proxied through Caddy on `:80`.
+### Device info (`adspace-info`, always on)
+
+Bound to `127.0.0.1:7224` only. Not proxied through Caddy.
+
+```bash
+curl -s http://127.0.0.1:7224/
+```
+
+```json
+{
+  "version": "1.2.3",
+  "serial": "4d919699",
+  "hostname": "adspace-4d919699",
+  "model": "Raspberry Pi 5 Model B Rev 1.0",
+  "mode": "kiosk"
+}
+```
+
+`serial` is the last 8 chars of the Pi CPU serial (same token used for hostname / hotspot SSID). QEMU/virt falls back to machine-id. `GET /api/info` is the same payload; `GET /health` returns `{"ok":true}`.
+
+### WiFi setup (Go binary on `:3000`, proxied through Caddy on `:80`)
 
 ### Connectivity check
 The watchdog uses `nmcli networking connectivity` (not connection profile state) to determine if the Pi has internet. NM keeps ethernet profiles `activated` even when the cable is unplugged — profile state is useless. `nmcli networking connectivity` returns `full` only when NM's internet probe succeeds. Two consecutive failures are required before entering setup mode, to avoid false triggers from momentary NM probe blips.
@@ -389,11 +414,16 @@ The hotspot restore on failure uses `nohup` so it survives if systemd kills the 
 ssh pi@adspace-{serial} "[ -f /tmp/adspace-setup-mode ] && echo SETUP || echo KIOSK"
 ```
 
+### Device info API (localhost:7224)
+```bash
+ssh pi@adspace-{serial} "curl -s http://127.0.0.1:7224/"
+```
+
 ### Watch everything live
 ```bash
 make logs PI_SSH=pi@adspace-{serial}
 # or:
-ssh pi@adspace-{serial} "sudo journalctl -u adspace-watchdog -u adspace-kiosk -u adspace-setup-api -u adspace-bootstrap -f"
+ssh pi@adspace-{serial} "sudo journalctl -u adspace-watchdog -u adspace-kiosk -u adspace-setup-api -u adspace-info -u adspace-bootstrap -f"
 ```
 
 ### Check bootstrap status (new Pi)
@@ -477,7 +507,7 @@ ssh pi@adspace-{serial} "ss -tlnp | grep 3000"
 | Missing `Conflicts=getty@tty1.service` | getty respawns bash on tty1 after cage exits → HUP kills next cage start |
 | Checking NM connection profile state for connectivity | Profiles stay `activated` even with cable unplugged — use `nmcli networking connectivity` |
 | Using legacy `hdmi_force_hotplug=1` in config.txt | Silently ignored on Pi 5 — use `dtparam=hdmi_force_hotplug=1` under `[all]` |
-| Editing watchdog.sh / start-display.sh / indicate.sh without updating bootstrap.sh | Newly provisioned Pis get the old embedded version from bootstrap.sh |
+| Editing watchdog.sh / start-display.sh / indicate.sh / device-info.py without updating bootstrap.sh | Newly provisioned Pis get the old embedded version from bootstrap.sh |
 | Uploading an uncompressed `.img` to GitHub Releases | File limit is 2 GB; Lite is ~2.8 GB — always publish `.img.xz` |
 | Using unquoted heredoc in embed.sh | Bash expands `$VAR`/`$()` inside bootstrap.sh content → file written as 0 bytes; use Python or quoted `<< 'DELIM'` with no expansions needed |
 | Inline Caddyfile handle blocks | `handle /path { ... }` on one line is rejected by Caddy 2.6.2 — always use multiline blocks |
