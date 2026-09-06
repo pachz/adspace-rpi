@@ -59,6 +59,17 @@ ADSPACE_URL="${ADSPACE_URL:-https://screen.adspace.so}"
 [[ "$ADSPACE_URL" =~ ^https?://[^[:space:]]+$ ]] \
     || die "Invalid ADSPACE_URL: $ADSPACE_URL"
 
+# Optional image version (embed.sh writes this from the git tag / CI release).
+ADSPACE_VERSION="${ADSPACE_VERSION:-}"
+for _f in /boot/firmware/adspace-version.env /boot/adspace-version.env; do
+    [[ -f "$_f" ]] || continue
+    # shellcheck disable=SC1090
+    source "$_f"
+    break
+done
+ADSPACE_VERSION="${ADSPACE_VERSION:-dev}"
+BASE_UA=""
+
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 log()  { echo -e "${GREEN}[bootstrap]${NC} $*"; logger -t adspace-bootstrap "$*"; }
 warn() { echo -e "${YELLOW}[bootstrap]${NC} $*" >&2; logger -t adspace-bootstrap "WARN: $*"; }
@@ -77,6 +88,36 @@ device_serial() {
     fi
     [[ -n "$s" ]] || die "Could not determine device serial"
     printf '%s' "${s: -8}"
+}
+
+# Chromium's real UA + " AdspaceTV/rpi-<tag>" (tag from image bake or GitHub release).
+dump_chromium_base_ua() {
+    local html
+    html=$(/usr/lib/chromium/chromium --headless --no-sandbox --disable-gpu \
+        --user-data-dir=/tmp/adspace-ua-dump --dump-dom \
+        'data:text/html,<script>document.write(navigator.userAgent)</script>' \
+        2>/dev/null || true)
+    rm -rf /tmp/adspace-ua-dump
+    BASE_UA=$(printf '%s' "$html" | tr '\n' ' ' | sed -n 's/.*<body>\(.*\)<\/body>.*/\1/p')
+    BASE_UA=$(printf '%s' "$BASE_UA" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    if [[ -z "$BASE_UA" ]]; then
+        warn "Could not dump Chromium user-agent — kiosk will use Chromium's default"
+        return 0
+    fi
+    log "Chromium base UA: $BASE_UA"
+}
+
+write_chromium_ua() {
+    local version="${1:-${ADSPACE_VERSION:-dev}}"
+    local token="${version#v}"
+    [[ -n "$BASE_UA" ]] || return 0
+    mkdir -p /opt/adspace
+    printf '%s AdspaceTV/rpi-%s\n' "$BASE_UA" "$token" > /opt/adspace/chromium-ua
+    printf '%s\n' "$token" > /opt/adspace/version
+    if id adspace >/dev/null 2>&1; then
+        chown adspace:adspace /opt/adspace/chromium-ua /opt/adspace/version
+    fi
+    log "Chromium user-agent: $(tr -d '\n' < /opt/adspace/chromium-ua)"
 }
 
 log "========================================================"
@@ -245,6 +286,10 @@ EOF
 cat > /opt/adspace/hide-cursor/hide-cursor.css << 'EOF'
 html, body, *, *::before, *::after { cursor: none !important; }
 EOF
+
+log "Capturing Chromium user-agent (AdspaceTV/rpi-${ADSPACE_VERSION#v})..."
+dump_chromium_base_ua
+write_chromium_ua "$ADSPACE_VERSION"
 
 # ── 3. NetworkManager ─────────────────────────────────────────────────────────
 log "Configuring NetworkManager..."
@@ -489,6 +534,11 @@ set -euo pipefail
 unset CHROMIUM_FLAGS
 CHROMIUM_BIN=/usr/lib/chromium/chromium
 
+UA_ARGS=()
+if [ -s /opt/adspace/chromium-ua ]; then
+    UA_ARGS=(--user-agent="$(tr -d '\n\r' < /opt/adspace/chromium-ua)")
+fi
+
 if [ -f /tmp/adspace-setup-mode ]; then
     # Wait for Caddy to be ready before launching browser
     for i in $(seq 1 10); do
@@ -511,6 +561,7 @@ if [ -f /tmp/adspace-setup-mode ]; then
         --disk-cache-size=1 \
         --load-extension=/opt/adspace/hide-cursor \
         --user-data-dir=/home/adspace/.config/adspace-setup-chromium \
+        "${UA_ARGS[@]}" \
         "http://localhost/tv"
 else
     source /opt/adspace/kiosk.env
@@ -528,6 +579,7 @@ else
         --password-store=basic \
         --load-extension=/opt/adspace/hide-cursor \
         --user-data-dir=/home/adspace/.config/adspace-chromium \
+        "${UA_ARGS[@]}" \
         "$ADSPACE_URL"
 fi
 EOF
@@ -1123,6 +1175,9 @@ if systemd-detect-virt -q 2>/dev/null || ! grep -q '^Serial' /proc/cpuinfo; then
     warn "On a real Pi, publish with: git tag v0.1.0 && git push origin v0.1.0"
 else
     fetch_github_release
+    if [[ -n "${RELEASE_TAG:-}" && "$RELEASE_TAG" != "null" ]]; then
+        write_chromium_ua "$RELEASE_TAG"
+    fi
 fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────

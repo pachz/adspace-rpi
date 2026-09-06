@@ -220,7 +220,7 @@ If `adspace-kiosk` is enabled at boot AND `Restart=always`, it starts itself bef
 `Conflicts=getty@tty1.service` in `adspace-kiosk.service` ensures systemd stops the getty autologin session before cage starts. Without it, when cage exits, `TTYVHangup=yes` hangs up tty1, getty respawns and autologins `adspace` with a bash shell on tty1, and the next cage start gets HUP'd from tty1 being held.
 
 ### 12. Call chromium binary directly, not the wrapper
-Use `/usr/lib/chromium/chromium`, not `/usr/bin/chromium`. The RPi wrapper (`rpi-chromium-mods`) injects `--js-flags=--no-decommit-pooled-pages` which is unsupported on this Chromium version and causes an immediate crash.
+Use `/usr/lib/chromium/chromium`, not `/usr/bin/chromium`. The RPi wrapper (`rpi-chromium-mods`) injects `--js-flags=--no-decommit-pooled-pages` which is unsupported on this Chromium version and causes an immediate crash. Pass `--user-agent` from `/opt/adspace/chromium-ua` (written at bootstrap after chromium install). Do not invent a UA — dump Chromium's real one and append ` AdspaceTV/rpi-<tag>`.
 
 ### 13. cage requires libwlroots-0.18 (RPi build)
 Must use `libwlroots-0.18=0.18.2-3+rpt4+b1` (RPi build). The Debian build of wlroots-0.18 fails with `EGL_BAD_PARAMETER` on Pi 5 GPU. libwlroots-0.19 (used by labwc) causes SEGV on mode switch. Both can coexist but cage must link against 0.18.
@@ -246,7 +246,7 @@ dtparam=hdmi_force_hotplug=1
 `adspace-bootstrap.service` runs **once per device** on Boot 2 (after cloud-init triggers a reboot). It does full provisioning from scratch:
 
 1. Waits for internet (retry loop, no timeout)
-2. Installs all packages: chromium, cage, libwlroots-0.18, caddy, NetworkManager, grim, jq, etc.
+2. Installs all packages: chromium, cage, libwlroots-0.18, caddy, NetworkManager, grim, jq, etc. Dumps Chromium's real UA and writes `/opt/adspace/chromium-ua` as `<ua> AdspaceTV/rpi-<tag>`
 3. Configures NetworkManager, disables conflicting network services
 4. Fixes boot config (HDMI for Pi 5)
 5. Creates users: `adspace`, `pi` (sudoers), `aiagent` (sudoers + SSH key)
@@ -283,6 +283,8 @@ ssh pi@adspace-{serial} "sudo /opt/adspace/bootstrap.sh"
 | `/opt/adspace/start-display.sh` | Single display launcher — checks setup flag, starts correct Chromium |
 | `/opt/adspace/indicate.sh` | Identify this Pi — blink ACT LED + flash hostname on the HDMI display |
 | `/opt/adspace/kiosk.env` | `ADSPACE_URL` env var — written by bootstrap (prod default `https://screen.adspace.so`) |
+| `/opt/adspace/chromium-ua` | Full Chromium `--user-agent` string — written by bootstrap after chromium install |
+| `/opt/adspace/version` | Release token used in the UA (`1.2.3` from tag `v1.2.3`) |
 | `/opt/adspace/wifi-setup-api` | Compiled Go binary, served on :3000 |
 | `/opt/adspace/wifi-setup/dist/` | Built React app, served by Caddy on :80 |
 | `/opt/adspace/wifi-setup/dist/config.json` | Runtime-written by watchdog — never deploy |
@@ -297,6 +299,7 @@ ssh pi@adspace-{serial} "sudo /opt/adspace/bootstrap.sh"
 | `/tmp/adspace-wifi-scan.json` | WiFi scan cache from before hotspot started |
 | `/boot/firmware/adspace-apt.env` | Optional `APT_PROXY=` — baked into the CI **dev** image, not prod |
 | `/boot/firmware/adspace-kiosk.env` | Optional `ADSPACE_URL=` — baked into the CI **dev** image (`https://dev.adspace.live`) |
+| `/boot/firmware/adspace-version.env` | `ADSPACE_VERSION=` from the git tag — baked by `embed.sh` / CI; bootstrap restamps the UA with the GitHub release tag when it pulls artifacts |
 
 ---
 

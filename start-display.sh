@@ -6,6 +6,11 @@ set -euo pipefail
 unset CHROMIUM_FLAGS
 CHROMIUM_BIN=/usr/lib/chromium/chromium
 
+UA_ARGS=()
+if [ -s /opt/adspace/chromium-ua ]; then
+    UA_ARGS=(--user-agent="$(tr -d '\n\r' < /opt/adspace/chromium-ua)")
+fi
+
 if [ -f /tmp/adspace-setup-mode ]; then
     # Wait for Caddy to be ready before launching browser
     for i in $(seq 1 10); do
@@ -28,6 +33,7 @@ if [ -f /tmp/adspace-setup-mode ]; then
         --disk-cache-size=1 \
         --load-extension=/opt/adspace/hide-cursor \
         --user-data-dir=/home/adspace/.config/adspace-setup-chromium \
+        "${UA_ARGS[@]}" \
         "http://localhost/tv"
 else
     source /opt/adspace/kiosk.env
@@ -45,5 +51,6 @@ else
         --password-store=basic \
         --load-extension=/opt/adspace/hide-cursor \
         --user-data-dir=/home/adspace/.config/adspace-chromium \
+        "${UA_ARGS[@]}" \
         "$ADSPACE_URL"
 fi

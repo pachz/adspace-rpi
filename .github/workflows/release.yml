@@ -193,6 +193,7 @@ jobs:
           IMG_NAME: ${{ steps.meta.outputs.name }}
           DEV_APT_PROXY: http://192.168.10.106:3142
           DEV_ADSPACE_URL: https://dev.adspace.live
+          ADSPACE_VERSION: ${{ steps.meta.outputs.release_tag }}
         run: |
           mkdir -p images
           xz -T0 -dkc raspios.img.xz > images/pristine.img
@@ -211,6 +212,11 @@ jobs:
           source .env.example
           set +a
           unset APT_PROXY ADSPACE_URL
+          if [[ -z "${ADSPACE_VERSION:-}" ]]; then
+            ADSPACE_VERSION="${IMG_NAME#adspace-tv-}"
+          fi
+          export ADSPACE_VERSION
+          echo "Image version for Chromium UA: ${ADSPACE_VERSION}"
           echo "Embedding prod (kiosk https://screen.adspace.so, no apt proxy)"
           embed_flavor "images/${IMG_NAME}.img"
 

@@ -37,6 +37,9 @@
 #   Optional: ADSPACE_URL (env or .env) writes adspace-kiosk.env so the
 #   kiosk opens that URL. Default in bootstrap is https://screen.adspace.so.
 #   The CI *dev* image sets https://dev.adspace.live.
+#
+#   ADSPACE_VERSION (env, or `git describe --tags --always`) is written to
+#   adspace-version.env so bootstrap stamps Chromium's UA as AdspaceTV/rpi-<tag>.
 # =============================================================================
 
 set -euo pipefail
@@ -326,10 +329,21 @@ EOF
     log "Kiosk URL: ${ADSPACE_URL}"
 fi
 
+if [[ -z "${ADSPACE_VERSION:-}" ]]; then
+    ADSPACE_VERSION=$(git -C "$REPO_DIR" describe --tags --always 2>/dev/null || true)
+fi
+if [[ -n "${ADSPACE_VERSION:-}" ]]; then
+    cat > "$MOUNT_DIR/adspace-version.env" << EOF
+ADSPACE_VERSION=${ADSPACE_VERSION}
+EOF
+    log "Version: ${ADSPACE_VERSION}"
+fi
+
 log "Boot partition key files:"
 ls -lh "$MOUNT_DIR/user-data" "$MOUNT_DIR/meta-data" \
     "$MOUNT_DIR/adspace-tailnet.env" "$MOUNT_DIR/adspace-apt.env" \
-    "$MOUNT_DIR/adspace-kiosk.env" 2>/dev/null || true
+    "$MOUNT_DIR/adspace-kiosk.env" "$MOUNT_DIR/adspace-version.env" \
+    2>/dev/null || true
 
 log "Unmounting..."
 

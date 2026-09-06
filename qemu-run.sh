@@ -349,6 +349,15 @@ ADSPACE_URL=${ADSPACE_URL}
 EOF
         log "Kiosk URL: guest will use ${ADSPACE_URL}"
     fi
+    if [[ -z "${ADSPACE_VERSION:-}" ]]; then
+        ADSPACE_VERSION=$(git -C "$REPO_DIR" describe --tags --always 2>/dev/null || true)
+    fi
+    if [[ -n "${ADSPACE_VERSION:-}" ]]; then
+        cat > "$QEMU_MNT/adspace-version.env" << EOF
+ADSPACE_VERSION=${ADSPACE_VERSION}
+EOF
+        log "Version: guest will use ${ADSPACE_VERSION}"
+    fi
     cleanup_boot
     trap - EXIT
 }
