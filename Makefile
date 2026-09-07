@@ -16,7 +16,7 @@
 #   make deploy-api PI_SSH=pi@adspace-{serial}     — API binary only
 #
 # ── Diagnostics ───────────────────────────────────────────────────────────────
-#   make deploy-info PI_SSH=pi@adspace-{serial}  — device-info.py (localhost:7224)
+#   make deploy-info PI_SSH=pi@adspace-{serial}  — device-info.py + command pubkey (localhost:7224)
 #   make logs PI_SSH=pi@adspace-{serial}
 #   make screenshot PI_SSH=pi@adspace-{serial}
 #   make indicate PI_SSH=pi@adspace-{serial}   — blink ACT LED + flash hostname on the TV
@@ -57,10 +57,24 @@ deploy-api:
 	     && sudo systemctl start adspace-setup-api.service || true"
 
 deploy-info:
-	$(SCP) device-info.py $(PI_SSH):/tmp/device-info.py
+	$(SCP) device-info.py command-pubkey $(PI_SSH):/tmp/
 	$(SSH) "sudo mv /tmp/device-info.py /opt/adspace/device-info.py \
-	     && sudo chown adspace:adspace /opt/adspace/device-info.py \
+	     && sudo mv /tmp/command-pubkey /opt/adspace/command-pubkey \
+	     && sudo chown adspace:adspace /opt/adspace/device-info.py /opt/adspace/command-pubkey \
 	     && sudo chmod +x /opt/adspace/device-info.py \
+	     && sudo chmod 644 /opt/adspace/command-pubkey \
+	     && dpkg -s python3-cryptography >/dev/null 2>&1 \
+	        || sudo apt-get install -y python3-cryptography \
+	     && printf '%s\n' \
+	        'adspace ALL=(ALL) NOPASSWD: /usr/bin/nmcli' \
+	        'adspace ALL=(ALL) NOPASSWD: /sbin/reboot' \
+	        'adspace ALL=(ALL) NOPASSWD: /usr/sbin/reboot' \
+	        'adspace ALL=(ALL) NOPASSWD: /opt/adspace/indicate.sh' \
+	        'adspace ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart adspace-kiosk.service' \
+	        'adspace ALL=(ALL) NOPASSWD: /bin/systemctl restart adspace-kiosk.service' \
+	        | sudo tee /etc/sudoers.d/adspace >/dev/null \
+	     && sudo chmod 440 /etc/sudoers.d/adspace \
+	     && sudo visudo -cf /etc/sudoers.d/adspace \
 	     && printf '%s\n' \
 	        '[Unit]' \
 	        'Description=AdSpace Device Info API' \
@@ -80,7 +94,7 @@ deploy-info:
 	        | sudo tee /etc/systemd/system/adspace-info.service >/dev/null \
 	     && sudo systemctl daemon-reload \
 	     && sudo systemctl enable --now adspace-info.service \
-	     && sudo systemctl restart adspace-info.service"
+	     && sudo systemctl restart adspace-info.service""
 
 # ── Diagnostics ───────────────────────────────────────────────────────────────
 logs:

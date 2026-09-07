@@ -101,7 +101,9 @@ rpi/
 ├── watchdog.sh               # Source copy of /opt/adspace/watchdog.sh (also embedded in bootstrap.sh)
 ├── start-display.sh          # Source copy of /opt/adspace/start-display.sh (also embedded in bootstrap.sh)
 ├── indicate.sh               # Identify this Pi — blink ACT LED + flash hostname on the TV
-├── device-info.py            # Always-on localhost:7224 API — version + CPU serial
+├── device-info.py            # Always-on localhost:7224 API — version, serial, signed commands
+├── command-pubkey            # Fleet Ed25519 public key for POST /api/command
+├── sign-command.py           # Sign a command packet (needs command-signing.key, gitignored)
 ├── kiosk.env                 # Source copy of /opt/adspace/kiosk.env
 ├── Makefile                  # Root: embed, deploy, logs, screenshot, indicate, ssh targets
 ├── rename-device.sh          # Rename Pi after venue install
@@ -127,7 +129,7 @@ rpi/
     └── main.go               # GET /api/networks, POST /api/wifi
 ```
 
-> **Note:** `watchdog.sh`, `start-display.sh`, `indicate.sh`, and `device-info.py` are standalone files here for pushing updates to running Pis, but they are also embedded as heredocs inside `bootstrap.sh`. If you edit any of them, update both places.
+> **Note:** `watchdog.sh`, `start-display.sh`, `indicate.sh`, and `device-info.py` are standalone files here for pushing updates to running Pis, but they are also embedded as heredocs inside `bootstrap.sh`. If you edit any of them, update both places. `command-pubkey` is written to `/opt/adspace/command-pubkey` by bootstrap — keep the repo file and that copy in sync.
 
 ---
 
@@ -139,7 +141,8 @@ rpi/
 ├── watchdog.sh               # Main control loop (run by systemd)
 ├── start-display.sh          # Launches Chromium — kiosk or setup mode based on flag
 ├── indicate.sh               # Identify this Pi — blink ACT LED + flash hostname
-├── device-info.py            # Always-on localhost:7224 API — version + CPU serial
+├── device-info.py            # Always-on localhost:7224 API — version, serial, signed commands
+├── command-pubkey            # Fleet Ed25519 public key for POST /api/command
 ├── kiosk.env                 # ADSPACE_URL env var
 ├── wifi-setup-api            # Compiled Go binary (serves :3000) — pulled from GitHub Releases
 └── wifi-setup/
@@ -237,9 +240,11 @@ make deploy-front PI_SSH=pi@adspace-{serial}
 # or: cd wifi-setup && make deploy PI_SSH=pi@adspace-{serial}
 ```
 
-### Deploy API only
+### Deploy device-info API
 ```bash
-make deploy-api PI_SSH=pi@adspace-{serial}
+make deploy-info PI_SSH=pi@adspace-{serial}
+# Pushes device-info.py + command-pubkey, installs python3-cryptography if needed,
+# updates adspace sudoers for indicate/reboot/kiosk restart, restarts adspace-info
 ```
 
 ### Tail live logs
@@ -487,6 +492,9 @@ This prevents a stale kiosk JS bundle from bleeding into the setup page (a real 
 
 ### CPU serial for SSID uniqueness
 `/etc/machine-id` is identical on all Pi clones. CPU serial (`/proc/cpuinfo`) is hardware-burned and unique per board — safe to use even after SD card cloning.
+
+### Signed device commands
+The kiosk page can POST an Ed25519-signed packet to `http://127.0.0.1:7224/api/command`. The Pi verifies it against `/opt/adspace/command-pubkey` (fleet-wide public key) and runs an allowlist (`info`, `reboot`, `indicate`, `restart-kiosk`). Replay is blocked with a timestamp window plus nonce. The private key lives in the AdSpace backend — never on the Pi, never in git (`command-signing.key` is gitignored). Sign a test packet with `python3 sign-command.py`.
 
 ### config.json never deployed
 The Pi writes `/opt/adspace/wifi-setup/dist/config.json` at runtime (hotspot SSID, password, URL). The repo's `public/config.json` is local-dev only. rsync uses `--exclude='config.json'` and `.gitignore` excludes it. `bootstrap.sh` also explicitly deletes it after unpacking the frontend tarball.

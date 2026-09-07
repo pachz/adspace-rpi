@@ -123,7 +123,7 @@ ssh pi@adspace-{serial} "sudo mv /tmp/wifi-setup-api-new /opt/adspace/wifi-setup
 ```
 
 ### Watchdog / shell scripts
-`watchdog.sh`, `start-display.sh`, `indicate.sh`, and `device-info.py` exist both as standalone files in the repo root AND as heredocs embedded inside `bootstrap.sh`. **If you edit any of them, you must update both the standalone file and the embedded copy inside `bootstrap.sh`.** Freshly provisioned Pis get the embedded version.
+`watchdog.sh`, `start-display.sh`, `indicate.sh`, and `device-info.py` exist both as standalone files in the repo root AND as heredocs embedded inside `bootstrap.sh`. **If you edit any of them, you must update both the standalone file and the embedded copy inside `bootstrap.sh`.** Freshly provisioned Pis get the embedded version. The Ed25519 command public key is `command-pubkey` in the repo and is also written by `bootstrap.sh` to `/opt/adspace/command-pubkey` — keep those in sync too.
 
 Push the updated file to a running Pi:
 ```bash
@@ -134,6 +134,7 @@ ssh pi@adspace-{serial} "sudo tee /opt/adspace/indicate.sh" < indicate.sh
 ssh pi@adspace-{serial} "sudo chmod +x /opt/adspace/indicate.sh"
 
 make deploy-info PI_SSH=pi@adspace-{serial}
+# Also pushes command-pubkey and refreshes adspace sudoers for signed commands
 ```
 
 ### Releasing a new version (frontend + API + flash image)
@@ -239,7 +240,7 @@ dtparam=hdmi_force_hotplug=1
 `bootstrap.sh` removes legacy settings and writes the correct one. Do not reintroduce the legacy settings.
 
 ### 16. bootstrap.sh and standalone scripts must stay in sync
-`watchdog.sh`, `start-display.sh`, `indicate.sh`, and `device-info.py` are embedded as heredocs inside `bootstrap.sh` (steps 7). The standalone files in the repo root are used for pushing updates to running Pis. **Both must be updated together.** Freshly provisioned Pis get the bootstrap-embedded version.
+`watchdog.sh`, `start-display.sh`, `indicate.sh`, and `device-info.py` are embedded as heredocs inside `bootstrap.sh` (steps 7). The standalone files in the repo root are used for pushing updates to running Pis. **Both must be updated together.** Freshly provisioned Pis get the bootstrap-embedded version. `command-pubkey` is written by bootstrap to `/opt/adspace/command-pubkey`.
 
 ---
 
@@ -248,12 +249,12 @@ dtparam=hdmi_force_hotplug=1
 `adspace-bootstrap.service` runs **once per device** on Boot 2 (after cloud-init triggers a reboot). It does full provisioning from scratch:
 
 1. Waits for internet (retry loop, no timeout)
-2. Installs all packages: chromium, cage, libwlroots-0.18, caddy, NetworkManager, grim, jq, etc. Dumps Chromium's real UA and writes `/opt/adspace/chromium-ua` as `<ua> AdspaceTV/rpi-<tag>`
+2. Installs all packages: chromium, cage, libwlroots-0.18, caddy, NetworkManager, grim, jq, python3-cryptography, etc. Dumps Chromium's real UA and writes `/opt/adspace/chromium-ua` as `<ua> AdspaceTV/rpi-<tag>`
 3. Configures NetworkManager, disables conflicting network services
 4. Fixes boot config (HDMI for Pi 5)
 5. Creates users: `adspace`, `pi` (sudoers), `aiagent` (sudoers + SSH key)
 6. Configures tty1 autologin
-7. Writes all scripts to `/opt/adspace/`: `watchdog.sh`, `start-display.sh`, `indicate.sh`, `device-info.py`, `kiosk.env`
+7. Writes all scripts to `/opt/adspace/`: `watchdog.sh`, `start-display.sh`, `indicate.sh`, `device-info.py`, `command-pubkey`, `kiosk.env`
 8. Writes `/etc/pam.d/cage`
 9. Writes `/etc/caddy/Caddyfile`
 10. Installs all systemd units: `adspace-kiosk`, `adspace-watchdog`, `adspace-setup-api`, `adspace-info` (enabled at boot)
@@ -285,7 +286,8 @@ ssh pi@adspace-{serial} "sudo /opt/adspace/bootstrap.sh"
 | `/opt/adspace/watchdog.sh` | Main control loop — do not edit in place, push from repo |
 | `/opt/adspace/start-display.sh` | Single display launcher — checks setup flag, starts correct Chromium |
 | `/opt/adspace/indicate.sh` | Identify this Pi — blink ACT LED + flash hostname on the HDMI display |
-| `/opt/adspace/device-info.py` | Always-on localhost:7224 API — version, CPU serial, hostname |
+| `/opt/adspace/device-info.py` | Always-on localhost:7224 API — version, CPU serial, signed commands |
+| `/opt/adspace/command-pubkey` | Fleet Ed25519 public key for `POST /api/command` |
 | `/opt/adspace/kiosk.env` | `ADSPACE_URL` env var — written by bootstrap (prod default `https://screen.adspace.so`) |
 | `/opt/adspace/chromium-ua` | Full Chromium `--user-agent` string — written by bootstrap after chromium install |
 | `/opt/adspace/version` | Release token used in the UA (`1.2.3` from tag `v1.2.3`) |
@@ -379,6 +381,51 @@ curl -s http://127.0.0.1:7224/
 ```
 
 `serial` is the last 8 chars of the Pi CPU serial (same token used for hostname / hotspot SSID). QEMU/virt falls back to machine-id. `GET /api/info` is the same payload; `GET /health` returns `{"ok":true}`.
+
+### Signed commands (`POST /api/command`)
+
+The kiosk page (or a local client) can deliver a command packet signed by the AdSpace backend. The Pi verifies Ed25519 against `/opt/adspace/command-pubkey`, then runs an allowlisted handler. Bound to localhost only — the signature is the authorization.
+
+```bash
+python3 sign-command.py --command info --device-id 4d919699 | \
+  curl -sS -X POST -H 'Content-Type: application/json' \
+    --data-binary @- http://127.0.0.1:7224/api/command
+```
+
+```json
+{
+  "command": "reboot",
+  "timestamp": 1788770000,
+  "nonce": "8f3c0123456789ab",
+  "deviceId": "4d919699",
+  "signature": "..."
+}
+```
+
+Signed UTF-8 message:
+
+```
+{command}.{timestamp}.{nonce}.{deviceId}
+```
+
+If `args` is present (JSON object), it is appended as `.` + canonical JSON (`separators=(",", ":")`, `sort_keys=True`). `timestamp` is the integer's decimal form. `deviceId` must be this Pi's 8-char CPU serial. `nonce` is 16–128 hex chars; a nonce cannot be reused. Packets older or newer than 120s are rejected.
+
+Allowlisted commands:
+
+| command | effect |
+|---|---|
+| `info` | returns the same payload as `GET /` |
+| `reboot` | `sudo reboot` (scheduled after the HTTP response) |
+| `indicate` | `sudo /opt/adspace/indicate.sh` |
+| `restart-kiosk` | `sudo systemctl restart adspace-kiosk.service` |
+
+Success:
+
+```json
+{"ok": true, "command": "info", "result": {"version": "1.2.3", "serial": "4d919699", "...": "..."}}
+```
+
+Failures return `{"error": "..."}` with 400 (malformed / unknown command), 401 (`invalid signature`, `wrong device`, `expired`, `replay`), 503 if Ed25519 support is missing, or 500 if the handler fails. The private key is **not** in this repo — `command-signing.key` is gitignored; the backend signs packets. Rotate by replacing `command-pubkey` (repo + `/opt/adspace/command-pubkey` + `DEFAULT_PUBKEY_HEX` in `device-info.py`) and restarting `adspace-info`.
 
 ### WiFi setup (Go binary on `:3000`, proxied through Caddy on `:80`)
 
@@ -508,6 +555,7 @@ ssh pi@adspace-{serial} "ss -tlnp | grep 3000"
 | Checking NM connection profile state for connectivity | Profiles stay `activated` even with cable unplugged — use `nmcli networking connectivity` |
 | Using legacy `hdmi_force_hotplug=1` in config.txt | Silently ignored on Pi 5 — use `dtparam=hdmi_force_hotplug=1` under `[all]` |
 | Editing watchdog.sh / start-display.sh / indicate.sh / device-info.py without updating bootstrap.sh | Newly provisioned Pis get the old embedded version from bootstrap.sh |
+| Changing `command-pubkey` without updating bootstrap.sh / `DEFAULT_PUBKEY_HEX` | New Pis or fallback verify keep the old fleet key |
 | Uploading an uncompressed `.img` to GitHub Releases | File limit is 2 GB; Lite is ~2.8 GB — always publish `.img.xz` |
 | Using unquoted heredoc in embed.sh | Bash expands `$VAR`/`$()` inside bootstrap.sh content → file written as 0 bytes; use Python or quoted `<< 'DELIM'` with no expansions needed |
 | Inline Caddyfile handle blocks | `handle /path { ... }` on one line is rejected by Caddy 2.6.2 — always use multiline blocks |

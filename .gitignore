@@ -10,6 +10,7 @@ wifi-setup/dist/config.json
 
 # Local secrets — never commit
 .env
+command-signing.key
 
 # bootstrap.sh contains embedded Tailscale OAuth secret — keep repo private
 # or rotate the secret if this repo ever becomes public
