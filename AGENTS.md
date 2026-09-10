@@ -40,6 +40,8 @@ The official Lite image URL + SHA-256 are pinned in `.github/workflows/release.y
 
 Optional: set `APT_PROXY=http://host:3142` and/or `ADSPACE_URL=https://dev.adspace.live` in `.env` so local `embed.sh` / `qemu-run.sh` images pick them up. Bootstrap writes `/etc/apt/apt.conf.d/01adspace-proxy` if the proxy is reachable; otherwise apt goes direct. The CI **dev** image bakes both in; the prod image does not.
 
+Optional: set `BESZEL_HUB_URL`, `BESZEL_KEY`, and `BESZEL_TOKEN` in `.env` (universal token from the Beszel hub) so images enroll the agent at bootstrap. Existing Pis: `make deploy-beszel PI_SSH=pi@adspace-{serial}`.
+
 **There is no `provision.sh`, `flash.sh`, or `prepare-image.sh`.** Those are gone. `bootstrap.sh` is the single source of truth for what's on a Pi.
 
 ---
@@ -136,6 +138,16 @@ ssh pi@adspace-{serial} "sudo chmod +x /opt/adspace/indicate.sh"
 make deploy-info PI_SSH=pi@adspace-{serial}
 # Also pushes command-pubkey and refreshes adspace sudoers for signed commands
 ```
+
+### Beszel agent
+`install-beszel.sh` is baked into the image by `embed.sh` (like `tailscale-install.sh`), not a heredoc in `bootstrap.sh`. Credentials come from `/boot/firmware/adspace-beszel.env` (written by embed from `.env`) or from `make deploy-beszel`.
+
+```bash
+# Existing Pi — requires BESZEL_HUB_URL, BESZEL_KEY, BESZEL_TOKEN in .env
+make deploy-beszel PI_SSH=pi@adspace-{serial}
+```
+
+The agent connects **out** to the hub (`HUB_URL` + universal `TOKEN`). `DISABLE_SSH=true` and `LISTEN=127.0.0.1:45876` so nothing inbound is exposed. `SYSTEM_NAME` is the hostname (`adspace-{serial}`, or the venue name after `rename-device.sh`).
 
 ### Releasing a new version (frontend + API + flash image)
 Commit on `main` with first line exactly `v1.2.3`. Anything after that becomes the GitHub Release changelog (GitHub also appends auto-generated notes):
@@ -263,8 +275,9 @@ dtparam=hdmi_force_hotplug=1
 13. Sets WiFi country (AE), unblocks rfkill
 14. Creates hotspot nmcli profile
 15. Installs Tailscale via the bundled `/opt/adspace/tailscale-install.sh` (vendored official installer; falls back to curl if missing) and registers the device
-16. Pulls `wifi-setup-api` binary + `wifi-setup-dist.tar.gz` from latest GitHub Release
-17. Touches `/etc/adspace-bootstrap-done`, reboots
+16. Installs Beszel agent if `BESZEL_HUB_URL` / `BESZEL_KEY` / `BESZEL_TOKEN` are set (boot file `adspace-beszel.env`) — outbound WebSocket, `SYSTEM_NAME` = hostname
+17. Pulls `wifi-setup-api` binary + `wifi-setup-dist.tar.gz` from latest GitHub Release
+18. Touches `/etc/adspace-bootstrap-done`, reboots
 
 Guarded by `ConditionPathExists=!/etc/adspace-bootstrap-done` — never runs twice.
 
@@ -283,6 +296,7 @@ ssh pi@adspace-{serial} "sudo /opt/adspace/bootstrap.sh"
 |------|---------|
 | `/opt/adspace/bootstrap.sh` | Full provisioning script — written by cloud-init via embed.sh |
 | `/opt/adspace/tailscale-install.sh` | Official Tailscale installer — vendored in the repo, baked into the image by `embed.sh` |
+| `/opt/adspace/install-beszel.sh` | Beszel agent installer — baked into the image by `embed.sh`; also `make deploy-beszel` |
 | `/opt/adspace/watchdog.sh` | Main control loop — do not edit in place, push from repo |
 | `/opt/adspace/start-display.sh` | Single display launcher — checks setup flag, starts correct Chromium |
 | `/opt/adspace/indicate.sh` | Identify this Pi — blink ACT LED + flash hostname on the HDMI display |
@@ -301,12 +315,15 @@ ssh pi@adspace-{serial} "sudo /opt/adspace/bootstrap.sh"
 | `/etc/systemd/system/adspace-kiosk.service` | cage Wayland session on tty1, boot-disabled |
 | `/etc/systemd/system/adspace-setup-api.service` | Go API, started by watchdog only |
 | `/etc/systemd/system/adspace-info.service` | Device info API on 127.0.0.1:7224, enabled at boot |
+| `/etc/systemd/system/beszel-agent.service` | Beszel agent — outbound WebSocket to hub, enabled at boot when credentials were present |
+| `/etc/beszel/beszel-agent.env` | Hub URL, key, token, `SYSTEM_NAME` — mode 600, written by `install-beszel.sh` |
 | `/etc/adspace-bootstrap-done` | Flag: exists = bootstrap already ran, skip it |
 | `/tmp/adspace-setup-mode` | Flag: exists = setup mode, absent = kiosk mode |
 | `/tmp/adspace-wifi-scan.json` | WiFi scan cache from before hotspot started |
 | `/boot/firmware/adspace-apt.env` | Optional `APT_PROXY=` — baked into the CI **dev** image, not prod |
 | `/boot/firmware/adspace-kiosk.env` | Optional `ADSPACE_URL=` — baked into the CI **dev** image (`https://dev.adspace.live`) |
 | `/boot/firmware/adspace-version.env` | `ADSPACE_VERSION=` from the git tag — baked by `embed.sh` / CI; bootstrap restamps the UA with the GitHub release tag when it pulls artifacts |
+| `/boot/firmware/adspace-beszel.env` | Optional `BESZEL_HUB_URL` / `BESZEL_KEY` / `BESZEL_TOKEN` — baked by `embed.sh` when set in `.env` |
 
 ---
 
@@ -346,6 +363,7 @@ ssh pi@adspace-{serial} "sudo /opt/adspace/bootstrap.sh"
 systemd boot
     ├── adspace-bootstrap.service  (Boot 2 only — full provisioning, then reboots)
     ├── adspace-info.service       (every boot — device info on 127.0.0.1:7224)
+    ├── beszel-agent.service       (every boot — metrics to Beszel hub, if installed)
     └── adspace-watchdog.service   (every boot after bootstrap, controls everything)
             ├── adspace-kiosk.service     (watchdog: systemctl restart)
             ├── adspace-setup-api.service (watchdog: systemctl start/stop)
@@ -507,8 +525,14 @@ ssh pi@adspace-{serial} "curl -s http://127.0.0.1:7224/"
 ```bash
 make logs PI_SSH=pi@adspace-{serial}
 # or:
-ssh pi@adspace-{serial} "sudo journalctl -u adspace-watchdog -u adspace-kiosk -u adspace-setup-api -u adspace-info -u adspace-bootstrap -f"
+ssh pi@adspace-{serial} "sudo journalctl -u adspace-watchdog -u adspace-kiosk -u adspace-setup-api -u adspace-info -u adspace-bootstrap -u beszel-agent -f"
 ```
+
+### Beszel agent
+```bash
+ssh pi@adspace-{serial} "systemctl is-active beszel-agent && sudo journalctl -u beszel-agent --no-pager -n 40"
+```
+Pi should appear in the hub under its hostname within a few seconds of the agent starting. Missing credentials → bootstrap logs `Beszel credentials not set — skip agent`.
 
 ### Check bootstrap status (new Pi)
 ```bash
@@ -593,6 +617,7 @@ ssh pi@adspace-{serial} "ss -tlnp | grep 3000"
 | Using legacy `hdmi_force_hotplug=1` in config.txt | Silently ignored on Pi 5 — use `dtparam=hdmi_force_hotplug=1` under `[all]` |
 | Editing watchdog.sh / start-display.sh / indicate.sh / device-info.py without updating bootstrap.sh | Newly provisioned Pis get the old embedded version from bootstrap.sh |
 | Changing `command-pubkey` without updating bootstrap.sh / `DEFAULT_PUBKEY_HEX` | New Pis or fallback verify keep the old fleet key |
+| Expecting Beszel without `BESZEL_*` in `.env` | Bootstrap skips the agent unless hub URL, key, and token are baked or passed to `make deploy-beszel` |
 | Uploading an uncompressed `.img` to GitHub Releases | File limit is 2 GB; Lite is ~2.8 GB — always publish `.img.xz` |
 | Using unquoted heredoc in embed.sh | Bash expands `$VAR`/`$()` inside bootstrap.sh content → file written as 0 bytes; use Python or quoted `<< 'DELIM'` with no expansions needed |
 | Inline Caddyfile handle blocks | `handle /path { ... }` on one line is rejected by Caddy 2.6.2 — always use multiline blocks |

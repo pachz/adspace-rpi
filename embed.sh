@@ -21,7 +21,8 @@
 #   mechanism). We replace user-data with a cloud-init config that:
 #     - Creates the pi user with a known password
 #     - Enables SSH with password authentication
-#     - Copies bootstrap.sh + tailscale-install.sh into /opt/adspace/ via write_files
+#     - Copies bootstrap.sh + tailscale-install.sh + install-beszel.sh
+#       into /opt/adspace/ via write_files
 #     - Installs and enables adspace-bootstrap.service via write_files
 #     - Runs bootstrap.sh on first boot via runcmd
 #
@@ -41,6 +42,10 @@
 #
 #   ADSPACE_VERSION (env, or `git describe --tags --always`) is written to
 #   adspace-version.env so bootstrap stamps Chromium's UA as AdspaceTV/rpi-<tag>.
+#
+#   Optional: BESZEL_HUB_URL + BESZEL_KEY + BESZEL_TOKEN (env or .env)
+#   write adspace-beszel.env onto the boot partition so bootstrap installs
+#   the Beszel agent and registers the Pi with the hub (universal token).
 # =============================================================================
 
 set -euo pipefail
@@ -74,6 +79,8 @@ OUTPUT_IMG="${2:-${REPO_DIR}/images/adspace-tv.img}"
     || die "adspace-bootstrap.service not found in repo root"
 [[ -f "$REPO_DIR/tailscale-install.sh" ]] \
     || die "tailscale-install.sh not found in repo root"
+[[ -f "$REPO_DIR/install-beszel.sh" ]] \
+    || die "install-beszel.sh not found in repo root"
 [[ "$OS" == "Darwin" || "$OS" == "Linux" ]] \
     || die "Unsupported OS: $OS (need macOS or Linux)"
 
@@ -248,15 +255,17 @@ log "Writing cloud-init user-data..."
 python3 - "$REPO_DIR/bootstrap.sh" \
           "$REPO_DIR/adspace-bootstrap.service" \
           "$REPO_DIR/tailscale-install.sh" \
+          "$REPO_DIR/install-beszel.sh" \
           "$MOUNT_DIR/user-data" \
           "$HASHED" << 'PYEOF'
 import sys, textwrap
 
-bootstrap_path, service_path, ts_install_path, out_path, hashed = sys.argv[1:]
+bootstrap_path, service_path, ts_install_path, beszel_path, out_path, hashed = sys.argv[1:]
 
 bootstrap = open(bootstrap_path).read()
 service   = open(service_path).read()
 ts_install = open(ts_install_path).read()
+beszel_install = open(beszel_path).read()
 
 def indent(text, spaces=6):
     pad = ' ' * spaces
@@ -300,6 +309,12 @@ write_files:
     owner: root:root
     content: |
 {indent(ts_install)}
+
+  - path: /opt/adspace/install-beszel.sh
+    permissions: '0755'
+    owner: root:root
+    content: |
+{indent(beszel_install)}
 
 # Enable SSH and bootstrap service
 runcmd:
@@ -350,10 +365,24 @@ EOF
     log "Version: ${ADSPACE_VERSION}"
 fi
 
+if [[ -n "${BESZEL_HUB_URL:-}" || -n "${BESZEL_KEY:-}" || -n "${BESZEL_TOKEN:-}" ]]; then
+    [[ -n "${BESZEL_HUB_URL:-}" && -n "${BESZEL_KEY:-}" && -n "${BESZEL_TOKEN:-}" ]] \
+        || die "Beszel needs BESZEL_HUB_URL, BESZEL_KEY, and BESZEL_TOKEN"
+    [[ "$BESZEL_HUB_URL" =~ ^https?://[^[:space:]]+$ ]] \
+        || die "Invalid BESZEL_HUB_URL: $BESZEL_HUB_URL"
+    {
+        printf 'BESZEL_HUB_URL="%s"\n' "${BESZEL_HUB_URL//\"/\\\"}"
+        printf 'BESZEL_KEY="%s"\n' "${BESZEL_KEY//\"/\\\"}"
+        printf 'BESZEL_TOKEN="%s"\n' "${BESZEL_TOKEN//\"/\\\"}"
+    } > "$MOUNT_DIR/adspace-beszel.env"
+    log "Beszel: image will register with ${BESZEL_HUB_URL}"
+fi
+
 log "Boot partition key files:"
 ls -lh "$MOUNT_DIR/user-data" "$MOUNT_DIR/meta-data" \
     "$MOUNT_DIR/adspace-tailnet.env" "$MOUNT_DIR/adspace-apt.env" \
     "$MOUNT_DIR/adspace-kiosk.env" "$MOUNT_DIR/adspace-version.env" \
+    "$MOUNT_DIR/adspace-beszel.env" \
     2>/dev/null || true
 
 log "Unmounting..."

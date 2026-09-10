@@ -52,6 +52,17 @@ if command -v tailscale &>/dev/null; then
     log "Tailscale hostname updated"
 fi
 
+# Keep Beszel SYSTEM_NAME in sync (used on next registration / restart)
+if [[ -f /etc/beszel/beszel-agent.env ]]; then
+    if grep -q '^SYSTEM_NAME=' /etc/beszel/beszel-agent.env; then
+        sed -i "s/^SYSTEM_NAME=.*/SYSTEM_NAME=$NEW_NAME/" /etc/beszel/beszel-agent.env
+    else
+        printf 'SYSTEM_NAME=%s\n' "$NEW_NAME" >> /etc/beszel/beszel-agent.env
+    fi
+    systemctl restart beszel-agent.service 2>/dev/null || true
+    log "Beszel SYSTEM_NAME updated"
+fi
+
 log ""
 log "────────────────────────────────────────────────────────"
 log "✓  Renamed to: $NEW_NAME"

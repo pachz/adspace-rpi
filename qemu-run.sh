@@ -37,8 +37,9 @@
 #
 # WHAT THIS TESTS:
 #   cloud-init, SSH, apt, most of bootstrap.sh, Headscale/Tailscale (if
-#   bootstrap gets that far). If HEADSCALE_LOGIN_SERVER is set in .env,
-#   the guest joins Headscale instead of Tailscale.com.
+#   bootstrap gets that far), Beszel agent (if BESZEL_* are set in .env).
+#   If HEADSCALE_LOGIN_SERVER is set in .env, the guest joins Headscale
+#   instead of Tailscale.com.
 #
 # WHAT THIS CANNOT TEST:
 #   cage / Chromium / HDMI, wlan0 hotspot, WiFi client. Bootstrap may abort
@@ -333,8 +334,12 @@ ud_path, src_path = Path(sys.argv[1]), Path(sys.argv[2])
 ud = ud_path.read_text()
 src = src_path.read_text()
 start = "  - path: /opt/adspace/tailscale-install.sh"
-end = "\n# Enable SSH and bootstrap service\n"
-i, j = ud.find(start), ud.find(end)
+end_new = "  - path: /opt/adspace/install-beszel.sh"
+end_old = "\n# Enable SSH and bootstrap service\n"
+i = ud.find(start)
+j = ud.find(end_new)
+if j < 0:
+    j = ud.find(end_old)
 if i < 0 or j < 0 or j <= i:
     print("user-data has no tailscale-install.sh block — skip refresh (re-embed to add it)")
 else:
@@ -351,6 +356,36 @@ else:
     )
     ud_path.write_text(ud[:i] + header + body + "\n" + ud[j:])
     print("refreshed tailscale-install.sh in user-data")
+PY
+    python3 - "$QEMU_MNT/user-data" "${REPO_DIR}/install-beszel.sh" << 'PY'
+from pathlib import Path
+import sys
+ud_path, src_path = Path(sys.argv[1]), Path(sys.argv[2])
+ud = ud_path.read_text()
+src = src_path.read_text()
+start = "  - path: /opt/adspace/install-beszel.sh"
+end = "\n# Enable SSH and bootstrap service\n"
+i, j = ud.find(start), ud.find(end)
+indent = "      "
+body = "\n".join(
+    (indent + line) if line else indent.rstrip()
+    for line in src.splitlines()
+)
+header = (
+    "  - path: /opt/adspace/install-beszel.sh\n"
+    "    permissions: '0755'\n"
+    "    owner: root:root\n"
+    "    content: |\n"
+)
+block = header + body + "\n"
+if i >= 0 and j > i:
+    ud_path.write_text(ud[:i] + block + ud[j:])
+    print("refreshed install-beszel.sh in user-data")
+elif j >= 0:
+    ud_path.write_text(ud[:j] + block + "\n" + ud[j:])
+    print("inserted install-beszel.sh into user-data")
+else:
+    print("user-data has no Enable SSH marker — skip install-beszel.sh")
 PY
     if [[ -n "${HEADSCALE_LOGIN_SERVER:-}" ]]; then
         [[ -n "${HEADSCALE_AUTH_KEY:-}" ]] \
@@ -383,6 +418,18 @@ EOF
 ADSPACE_VERSION=${ADSPACE_VERSION}
 EOF
         log "Version: guest will use ${ADSPACE_VERSION}"
+    fi
+    if [[ -n "${BESZEL_HUB_URL:-}" || -n "${BESZEL_KEY:-}" || -n "${BESZEL_TOKEN:-}" ]]; then
+        [[ -n "${BESZEL_HUB_URL:-}" && -n "${BESZEL_KEY:-}" && -n "${BESZEL_TOKEN:-}" ]] \
+            || die "Beszel needs BESZEL_HUB_URL, BESZEL_KEY, and BESZEL_TOKEN"
+        [[ "$BESZEL_HUB_URL" =~ ^https?://[^[:space:]]+$ ]] \
+            || die "Invalid BESZEL_HUB_URL: $BESZEL_HUB_URL"
+        {
+            printf 'BESZEL_HUB_URL="%s"\n' "${BESZEL_HUB_URL//\"/\\\"}"
+            printf 'BESZEL_KEY="%s"\n' "${BESZEL_KEY//\"/\\\"}"
+            printf 'BESZEL_TOKEN="%s"\n' "${BESZEL_TOKEN//\"/\\\"}"
+        } > "$QEMU_MNT/adspace-beszel.env"
+        log "Beszel: guest will register with ${BESZEL_HUB_URL}"
     fi
     cleanup_boot
     trap - EXIT

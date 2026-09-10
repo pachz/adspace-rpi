@@ -17,6 +17,7 @@
 #
 # ── Diagnostics ───────────────────────────────────────────────────────────────
 #   make deploy-info PI_SSH=pi@adspace-{serial}  — device-info.py + command pubkey (localhost:7224)
+#   make deploy-beszel PI_SSH=pi@adspace-{serial} — install/update Beszel agent (needs BESZEL_* in .env)
 #   make logs PI_SSH=pi@adspace-{serial}
 #   make screenshot PI_SSH=pi@adspace-{serial}
 #   make indicate PI_SSH=pi@adspace-{serial}   — blink ACT LED + flash hostname on the TV
@@ -29,7 +30,7 @@ SSH  = ssh $(PI_SSH)
 SCP  = scp
 QEMU_IMG ?=
 
-.PHONY: embed deploy deploy-front deploy-api deploy-info logs screenshot indicate ssh qemu qemu-gui
+.PHONY: embed deploy deploy-front deploy-api deploy-info deploy-beszel logs screenshot indicate ssh qemu qemu-gui
 
 # ── Image prep ────────────────────────────────────────────────────────────────
 embed:
@@ -94,11 +95,24 @@ deploy-info:
 	        | sudo tee /etc/systemd/system/adspace-info.service >/dev/null \
 	     && sudo systemctl daemon-reload \
 	     && sudo systemctl enable --now adspace-info.service \
-	     && sudo systemctl restart adspace-info.service""
+	     && sudo systemctl restart adspace-info.service"
+
+deploy-beszel:
+	@test -f .env || { echo "Need .env with BESZEL_HUB_URL, BESZEL_KEY, BESZEL_TOKEN"; exit 1; }
+	$(SCP) install-beszel.sh $(PI_SSH):/tmp/install-beszel.sh
+	@bash -c 'set -euo pipefail; set -a; source .env; set +a; \
+	  if [[ -z "$${BESZEL_HUB_URL:-}" || -z "$${BESZEL_KEY:-}" || -z "$${BESZEL_TOKEN:-}" ]]; then \
+	    echo "Set BESZEL_HUB_URL, BESZEL_KEY, and BESZEL_TOKEN in .env"; exit 1; \
+	  fi; \
+	  ssh $(PI_SSH) "sudo env \
+	    BESZEL_HUB_URL=\"$$BESZEL_HUB_URL\" \
+	    BESZEL_KEY=\"$$BESZEL_KEY\" \
+	    BESZEL_TOKEN=\"$$BESZEL_TOKEN\" \
+	    bash /tmp/install-beszel.sh"'
 
 # ── Diagnostics ───────────────────────────────────────────────────────────────
 logs:
-	$(SSH) "sudo journalctl -u adspace-watchdog -u adspace-kiosk -u adspace-setup-api -u adspace-info -u adspace-bootstrap -f"
+	$(SSH) "sudo journalctl -u adspace-watchdog -u adspace-kiosk -u adspace-setup-api -u adspace-info -u adspace-bootstrap -u beszel-agent -f"
 
 screenshot:
 	$(SSH) "sudo -u adspace sh -c 'WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1001 grim /tmp/adspace-screen.png'"

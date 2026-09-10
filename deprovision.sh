@@ -30,6 +30,7 @@ systemctl stop adspace-watchdog.service  2>/dev/null || true
 systemctl stop adspace-kiosk.service     2>/dev/null || true
 systemctl stop adspace-setup-api.service 2>/dev/null || true
 systemctl stop adspace-info.service      2>/dev/null || true
+systemctl stop beszel-agent.service      2>/dev/null || true
 systemctl stop caddy.service             2>/dev/null || true
 
 log "Disabling services..."
@@ -38,6 +39,7 @@ systemctl disable adspace-kiosk.service      2>/dev/null || true
 systemctl disable adspace-setup-api.service  2>/dev/null || true
 systemctl disable adspace-info.service       2>/dev/null || true
 systemctl disable adspace-bootstrap.service  2>/dev/null || true
+systemctl disable beszel-agent.service       2>/dev/null || true
 
 log "Removing systemd units..."
 rm -f /etc/systemd/system/adspace-watchdog.service
@@ -45,12 +47,14 @@ rm -f /etc/systemd/system/adspace-kiosk.service
 rm -f /etc/systemd/system/adspace-setup-api.service
 rm -f /etc/systemd/system/adspace-info.service
 rm -f /etc/systemd/system/adspace-bootstrap.service
+rm -f /etc/systemd/system/beszel-agent.service
 rm -f /etc/systemd/system/getty@tty1.service.d/autologin.conf
 rmdir /etc/systemd/system/getty@tty1.service.d 2>/dev/null || true
 systemctl daemon-reload
 
 log "Removing /opt/adspace..."
 rm -rf /opt/adspace
+rm -rf /opt/beszel-agent /etc/beszel /var/lib/beszel-agent
 
 log "Resetting Caddyfile..."
 cat > /etc/caddy/Caddyfile << 'EOF'
@@ -93,6 +97,9 @@ if command -v tailscale &>/dev/null; then
     tailscale logout 2>/dev/null || true
 fi
 # Note: we don't uninstall Tailscale itself — bootstrap.sh skips reinstall if already present
+
+log "Removing beszel user..."
+userdel beszel 2>/dev/null || warn "beszel user not found or already removed"
 
 log ""
 log "────────────────────────────────────────────────────────"

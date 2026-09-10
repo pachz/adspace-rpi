@@ -102,6 +102,7 @@ rpi/
 ├── start-display.sh          # Source copy of /opt/adspace/start-display.sh (also embedded in bootstrap.sh)
 ├── indicate.sh               # Identify this Pi — blink ACT LED + flash hostname on the TV
 ├── device-info.py            # Always-on localhost:7224 API — version, serial, signed commands
+├── install-beszel.sh         # Beszel agent installer (baked by embed.sh; make deploy-beszel)
 ├── command-pubkey            # Fleet Ed25519 public key for POST /api/command
 ├── sign-command.py           # Sign a command packet (needs command-signing.key, gitignored)
 ├── kiosk.env                 # Source copy of /opt/adspace/kiosk.env
@@ -138,6 +139,7 @@ rpi/
 ```
 /opt/adspace/
 ├── bootstrap.sh              # Full provisioning script (written by cloud-init via embed.sh)
+├── install-beszel.sh         # Beszel agent installer (baked by embed.sh)
 ├── watchdog.sh               # Main control loop (run by systemd)
 ├── start-display.sh          # Launches Chromium — kiosk or setup mode based on flag
 ├── indicate.sh               # Identify this Pi — blink ACT LED + flash hostname
@@ -158,7 +160,10 @@ rpi/
 ├── adspace-watchdog.service  # Starts on boot, controls everything else
 ├── adspace-kiosk.service     # cage Wayland session on tty1, boot-disabled
 ├── adspace-setup-api.service # Go API, started by watchdog only
-└── adspace-info.service      # Device info API on 127.0.0.1:7224, enabled at boot
+├── adspace-info.service      # Device info API on 127.0.0.1:7224, enabled at boot
+└── beszel-agent.service      # Beszel metrics agent (when BESZEL_* were set)
+
+/etc/beszel/beszel-agent.env  # Hub URL / key / token — mode 600, written by install-beszel.sh
 
 /etc/adspace-bootstrap-done   # Flag file — exists = bootstrap already ran, skip it
 /tmp/adspace-setup-mode       # Flag file — exists = setup mode, absent = kiosk
@@ -245,6 +250,13 @@ make deploy-front PI_SSH=pi@adspace-{serial}
 make deploy-info PI_SSH=pi@adspace-{serial}
 # Pushes device-info.py + command-pubkey, installs python3-cryptography if needed,
 # updates adspace sudoers for indicate/reboot/kiosk restart, restarts adspace-info
+```
+
+### Deploy Beszel agent
+```bash
+make deploy-beszel PI_SSH=pi@adspace-{serial}
+# Requires BESZEL_HUB_URL, BESZEL_KEY, BESZEL_TOKEN in .env
+# (universal token from Hub → Settings → Tokens)
 ```
 
 ### Tail live logs
@@ -420,6 +432,7 @@ ssh pi@adspace-{serial} "sudo /opt/adspace/bootstrap.sh"
 - [ ] Phone connects to hotspot → opens `http://192.168.4.1` → WiFi form with network dropdown
 - [ ] Submit valid WiFi creds → TV transitions to kiosk within 15s
 - [ ] `make logs` shows clean watchdog transitions
+- [ ] If Beszel creds were set: Pi appears in the hub as `adspace-{serial}`
 
 ---
 

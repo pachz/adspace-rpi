@@ -10,6 +10,7 @@
 #   - Pulls the app binary + frontend from the latest GitHub Release
 #   - Sets hostname from CPU serial
 #   - Registers with Tailscale (or Headscale if HEADSCALE_LOGIN_SERVER is set)
+#   - Installs Beszel agent if BESZEL_HUB_URL / KEY / TOKEN are set
 #   - Reboots into kiosk mode
 #
 # Guarded by /etc/adspace-bootstrap-done — never runs twice.
@@ -70,6 +71,18 @@ for _f in /boot/firmware/adspace-version.env /boot/adspace-version.env; do
 done
 ADSPACE_VERSION="${ADSPACE_VERSION:-dev}"
 BASE_UA=""
+
+# Optional Beszel hub (embed.sh writes this from BESZEL_*). Agent is skipped
+# unless all three are set. Universal token registers each Pi by hostname.
+BESZEL_HUB_URL="${BESZEL_HUB_URL:-}"
+BESZEL_KEY="${BESZEL_KEY:-}"
+BESZEL_TOKEN="${BESZEL_TOKEN:-}"
+for _f in /boot/firmware/adspace-beszel.env /boot/adspace-beszel.env; do
+    [[ -f "$_f" ]] || continue
+    # shellcheck disable=SC1090
+    source "$_f"
+    break
+done
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 log()  { echo -e "${GREEN}[bootstrap]${NC} $*"; logger -t adspace-bootstrap "$*"; }
@@ -1851,7 +1864,26 @@ else
     log "Tailscale registered as $NEW_HOSTNAME"
 fi
 
-# ── 16. Pull release artifacts from GitHub ────────────────────────────────────
+# ── 16. Beszel agent (outbound WebSocket to hub) ──────────────────────────────
+if [[ -n "${BESZEL_HUB_URL}${BESZEL_KEY}${BESZEL_TOKEN}" ]]; then
+    [[ -n "$BESZEL_HUB_URL" && -n "$BESZEL_KEY" && -n "$BESZEL_TOKEN" ]] \
+        || die "Beszel needs BESZEL_HUB_URL, BESZEL_KEY, and BESZEL_TOKEN"
+    if [[ -x /opt/adspace/install-beszel.sh ]]; then
+        log "Installing Beszel agent..."
+        if ! BESZEL_HUB_URL="$BESZEL_HUB_URL" \
+            BESZEL_KEY="$BESZEL_KEY" \
+            BESZEL_TOKEN="$BESZEL_TOKEN" \
+            /opt/adspace/install-beszel.sh; then
+            warn "Beszel agent install failed — continuing without monitoring"
+        fi
+    else
+        warn "install-beszel.sh missing — skip Beszel (re-embed the image to bake it in)"
+    fi
+else
+    log "Beszel credentials not set — skip agent"
+fi
+
+# ── 17. Pull release artifacts from GitHub ────────────────────────────────────
 fetch_github_release() {
     log "Fetching latest release from github.com/$GITHUB_REPO..."
     local api="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
