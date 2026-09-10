@@ -286,7 +286,7 @@ ssh pi@adspace-{serial} "sudo /opt/adspace/bootstrap.sh"
 | `/opt/adspace/watchdog.sh` | Main control loop — do not edit in place, push from repo |
 | `/opt/adspace/start-display.sh` | Single display launcher — checks setup flag, starts correct Chromium |
 | `/opt/adspace/indicate.sh` | Identify this Pi — blink ACT LED + flash hostname on the HDMI display |
-| `/opt/adspace/device-info.py` | Always-on localhost:7224 API — version, CPU serial, signed commands |
+| `/opt/adspace/device-info.py` | Always-on localhost:7224 API — version, CPU serial, health metrics, signed commands |
 | `/opt/adspace/command-pubkey` | Fleet Ed25519 public key for `POST /api/command` |
 | `/opt/adspace/kiosk.env` | `ADSPACE_URL` env var — written by bootstrap (prod default `https://screen.adspace.so`) |
 | `/opt/adspace/chromium-ua` | Full Chromium `--user-agent` string — written by bootstrap after chromium install |
@@ -376,11 +376,48 @@ curl -s http://127.0.0.1:7224/
   "serial": "4d919699",
   "hostname": "adspace-4d919699",
   "model": "Raspberry Pi 5 Model B Rev 1.0",
-  "mode": "kiosk"
+  "mode": "kiosk",
+  "health": {
+    "uptimeSec": 86400,
+    "cpu": {
+      "percent": 12.4,
+      "load1": 0.35,
+      "load5": 0.28,
+      "load15": 0.22,
+      "tempC": 51.2,
+      "freqMhz": 2400
+    },
+    "memory": {
+      "totalBytes": 8471838720,
+      "usedBytes": 1207959552,
+      "availableBytes": 7263879168,
+      "percent": 14.3
+    },
+    "swap": { "totalBytes": 0, "usedBytes": 0, "percent": 0.0 },
+    "disk": {
+      "path": "/",
+      "totalBytes": 31268536320,
+      "usedBytes": 4508876800,
+      "availableBytes": 26759659520,
+      "percent": 14.4
+    },
+    "fanRpm": 3200,
+    "throttle": {
+      "raw": 0,
+      "underVoltage": false,
+      "freqCapped": false,
+      "throttled": false,
+      "softTempLimit": false,
+      "underVoltageOccurred": false,
+      "freqCappedOccurred": false,
+      "throttledOccurred": false,
+      "softTempLimitOccurred": false
+    }
+  }
 }
 ```
 
-`serial` is the last 8 chars of the Pi CPU serial (same token used for hostname / hotspot SSID). QEMU/virt falls back to machine-id. `GET /api/info` is the same payload; `GET /health` returns `{"ok":true}`.
+`serial` is the last 8 chars of the Pi CPU serial (same token used for hostname / hotspot SSID). QEMU/virt falls back to machine-id. `GET /api/info` is the same payload. `GET /health` returns `{"ok": true, "health": {...}}` — `ok` is liveness; the nested `health` object is also included on `GET /` and the signed `info` command. CPU `percent` is busy-time since the previous request (no extra sleep). `tempC` / `freqMhz` / `fanRpm` / `throttle` are null when the sysfs node or `vcgencmd` is unavailable (e.g. QEMU).
 
 ### Signed commands (`POST /api/command`)
 

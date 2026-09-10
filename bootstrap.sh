@@ -885,9 +885,9 @@ cat > /opt/adspace/device-info.py << 'DEVICE_INFO_PY'
 #
 # Also installed to /opt/adspace/device-info.py by bootstrap.sh — keep both in sync.
 #
-#   GET  /            device info
+#   GET  /            device info (identity + health)
 #   GET  /api/info    same payload
-#   GET  /health      {"ok": true}
+#   GET  /health      {"ok": true, "health": {...}}
 #   POST /api/command signed command packet (Ed25519)
 #
 # Command packet (JSON):
@@ -912,6 +912,7 @@ from __future__ import annotations
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import base64
+import glob
 import json
 import os
 import re
@@ -992,6 +993,252 @@ def model():
         return ""
 
 
+def _read_text(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def _read_int(path):
+    text = _read_text(path)
+    if text is None:
+        return None
+    try:
+        return int(text.strip().split()[0], 0)
+    except (ValueError, IndexError):
+        return None
+
+
+def _round(value, digits=1):
+    if value is None:
+        return None
+    return round(float(value), digits)
+
+
+# CPU% from /proc/stat deltas between requests — no sleep in the request path.
+_cpu_lock = threading.Lock()
+_cpu_prev = None  # (idle, total)
+_cpu_percent = None
+
+
+def _cpu_times():
+    text = _read_text("/proc/stat")
+    if not text:
+        return None
+    for line in text.splitlines():
+        if not line.startswith("cpu "):
+            continue
+        parts = line.split()[1:]
+        if len(parts) < 4:
+            return None
+        try:
+            nums = [int(p) for p in parts[:8]]
+        except ValueError:
+            return None
+        idle = nums[3] + (nums[4] if len(nums) > 4 else 0)
+        return idle, sum(nums)
+    return None
+
+
+_cpu_prev = _cpu_times()
+
+
+def cpu_percent():
+    """Busy CPU since the previous sample. None until two samples exist."""
+    global _cpu_prev, _cpu_percent
+    times = _cpu_times()
+    if times is None:
+        return None
+    with _cpu_lock:
+        prev = _cpu_prev
+        _cpu_prev = times
+        if prev is None:
+            return _cpu_percent
+        idle_d = times[0] - prev[0]
+        total_d = times[1] - prev[1]
+        if total_d <= 0:
+            return _cpu_percent
+        busy = 1.0 - (idle_d / total_d)
+        _cpu_percent = _round(max(0.0, min(100.0, busy * 100.0)), 1)
+        return _cpu_percent
+
+
+def loadavg():
+    try:
+        one, five, fifteen = os.getloadavg()
+        return _round(one, 2), _round(five, 2), _round(fifteen, 2)
+    except OSError:
+        return None, None, None
+
+
+def uptime_sec():
+    text = _read_text("/proc/uptime")
+    if not text:
+        return None
+    try:
+        return int(float(text.split()[0]))
+    except (ValueError, IndexError):
+        return None
+
+
+def cpu_temp_c():
+    millideg = _read_int("/sys/class/thermal/thermal_zone0/temp")
+    if millideg is None:
+        return None
+    return _round(millideg / 1000.0, 1)
+
+
+def cpu_freq_mhz():
+    freqs = []
+    for path in glob.glob("/sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_cur_freq"):
+        val = _read_int(path)
+        if val is not None and val > 0:
+            freqs.append(val)
+    if not freqs:
+        return None
+    return int(round(sum(freqs) / len(freqs) / 1000.0))
+
+
+def meminfo_bytes():
+    text = _read_text("/proc/meminfo")
+    if not text:
+        return {}
+    fields = {}
+    for line in text.splitlines():
+        if ":" not in line:
+            continue
+        key, rest = line.split(":", 1)
+        try:
+            fields[key] = int(rest.strip().split()[0]) * 1024
+        except (ValueError, IndexError):
+            continue
+    return fields
+
+
+def memory_stats(fields):
+    total = fields.get("MemTotal")
+    available = fields.get("MemAvailable")
+    if not total or available is None:
+        return None
+    used = max(0, total - available)
+    return {
+        "totalBytes": total,
+        "usedBytes": used,
+        "availableBytes": available,
+        "percent": _round(used * 100.0 / total, 1),
+    }
+
+
+def swap_stats(fields):
+    if not fields:
+        return None
+    total = fields.get("SwapTotal") or 0
+    free = fields.get("SwapFree") or 0
+    used = max(0, total - free)
+    return {
+        "totalBytes": total,
+        "usedBytes": used,
+        "percent": _round(used * 100.0 / total, 1) if total else 0.0,
+    }
+
+
+def disk_stats(path="/"):
+    try:
+        st = os.statvfs(path)
+    except OSError:
+        return None
+    total = st.f_frsize * st.f_blocks
+    available = st.f_frsize * st.f_bavail
+    if total <= 0:
+        return None
+    used = max(0, total - available)
+    return {
+        "path": path,
+        "totalBytes": total,
+        "usedBytes": used,
+        "availableBytes": available,
+        "percent": _round(used * 100.0 / total, 1),
+    }
+
+
+def fan_rpm():
+    for path in sorted(glob.glob("/sys/class/hwmon/hwmon*/fan1_input")):
+        val = _read_int(path)
+        if val is not None and val >= 0:
+            return val
+    return None
+
+
+_THROTTLE_BITS = (
+    ("underVoltage", 0),
+    ("freqCapped", 1),
+    ("throttled", 2),
+    ("softTempLimit", 3),
+    ("underVoltageOccurred", 16),
+    ("freqCappedOccurred", 17),
+    ("throttledOccurred", 18),
+    ("softTempLimitOccurred", 19),
+)
+
+
+def _parse_throttled(raw):
+    flags = {"raw": raw}
+    for name, bit in _THROTTLE_BITS:
+        flags[name] = bool(raw & (1 << bit))
+    return flags
+
+
+def throttle_stats():
+    """Pi under-voltage / thermal throttle flags. Null on non-Pi or if unavailable."""
+    text = _read_text("/sys/devices/platform/soc/soc:firmware/get_throttled")
+    if text:
+        try:
+            return _parse_throttled(int(text.strip(), 0))
+        except ValueError:
+            pass
+    try:
+        result = subprocess.run(
+            ["vcgencmd", "get_throttled"],
+            capture_output=True,
+            text=True,
+            timeout=1,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    out = (result.stdout or "").strip()
+    if "=" in out:
+        out = out.split("=", 1)[-1]
+    try:
+        return _parse_throttled(int(out, 0))
+    except ValueError:
+        return None
+
+
+def health():
+    load1, load5, load15 = loadavg()
+    mem = meminfo_bytes()
+    return {
+        "uptimeSec": uptime_sec(),
+        "cpu": {
+            "percent": cpu_percent(),
+            "load1": load1,
+            "load5": load5,
+            "load15": load15,
+            "tempC": cpu_temp_c(),
+            "freqMhz": cpu_freq_mhz(),
+        },
+        "memory": memory_stats(mem),
+        "swap": swap_stats(mem),
+        "disk": disk_stats("/"),
+        "fanRpm": fan_rpm(),
+        "throttle": throttle_stats(),
+    }
+
+
 def info():
     return {
         "version": version(),
@@ -999,6 +1246,7 @@ def info():
         "hostname": socket.gethostname(),
         "model": model(),
         "mode": "setup" if os.path.exists(SETUP_FLAG) else "kiosk",
+        "health": health(),
     }
 
 
@@ -1247,7 +1495,7 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/", "/api", "/api/info"):
             self._send(200, info())
         elif path == "/health":
-            self._send(200, {"ok": True})
+            self._send(200, {"ok": True, "health": health()})
         else:
             self._send(404, {"error": "not found"})
 
