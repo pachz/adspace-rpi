@@ -30,7 +30,9 @@
 #
 #   Optional: HEADSCALE_LOGIN_SERVER + HEADSCALE_AUTH_KEY (env or .env)
 #   write adspace-tailnet.env onto the boot partition so bootstrap joins
-#   Headscale instead of Tailscale.com. CI sources .env.example for this.
+#   Headscale instead of Tailscale.com. CI sources .env.example for the
+#   login server, then overrides HEADSCALE_AUTH_KEY from GitHub secrets
+#   HS_PROD_KEY (prod image) / HS_LAB_KEY (dev image).
 #
 #   Optional: APT_PROXY (env or .env) writes adspace-apt.env so bootstrap
 #   apt-get goes through a local apt-cacher-ng. The CI *dev* image sets
@@ -39,6 +41,11 @@
 #   Optional: ADSPACE_URL (env or .env) writes adspace-kiosk.env so the
 #   kiosk opens that URL. Default in bootstrap is https://screen.adspace.so.
 #   The CI *dev* image sets https://dev.adspace.live.
+#
+#   Optional: HOSTNAME_PREFIX (env or .env) writes adspace-hostname.env.
+#   Must be lowercase alnum plus a trailing hyphen (e.g. dev-). Bootstrap
+#   then sets hostname {prefix}adspace-{serial}. The CI *dev* image sets
+#   dev-; prod does not.
 #
 #   ADSPACE_VERSION (env, or `git describe --tags --always`) is written to
 #   adspace-version.env so bootstrap stamps Chromium's UA as AdspaceTV/rpi-<tag>.
@@ -355,6 +362,15 @@ EOF
     log "Kiosk URL: ${ADSPACE_URL}"
 fi
 
+if [[ -n "${HOSTNAME_PREFIX:-}" ]]; then
+    [[ "$HOSTNAME_PREFIX" =~ ^[a-z0-9]+-$ ]] \
+        || die "Invalid HOSTNAME_PREFIX (want e.g. dev-): ${HOSTNAME_PREFIX}"
+    cat > "$MOUNT_DIR/adspace-hostname.env" << EOF
+HOSTNAME_PREFIX=${HOSTNAME_PREFIX}
+EOF
+    log "Hostname prefix: ${HOSTNAME_PREFIX}"
+fi
+
 if [[ -z "${ADSPACE_VERSION:-}" ]]; then
     ADSPACE_VERSION=$(git -C "$REPO_DIR" describe --tags --always 2>/dev/null || true)
 fi
@@ -381,8 +397,8 @@ fi
 log "Boot partition key files:"
 ls -lh "$MOUNT_DIR/user-data" "$MOUNT_DIR/meta-data" \
     "$MOUNT_DIR/adspace-tailnet.env" "$MOUNT_DIR/adspace-apt.env" \
-    "$MOUNT_DIR/adspace-kiosk.env" "$MOUNT_DIR/adspace-version.env" \
-    "$MOUNT_DIR/adspace-beszel.env" \
+    "$MOUNT_DIR/adspace-kiosk.env" "$MOUNT_DIR/adspace-hostname.env" \
+    "$MOUNT_DIR/adspace-version.env" "$MOUNT_DIR/adspace-beszel.env" \
     2>/dev/null || true
 
 log "Unmounting..."

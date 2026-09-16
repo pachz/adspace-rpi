@@ -27,8 +27,8 @@ Boot 3+: Normal operation — adspace-watchdog controls kiosk/setup transitions
 
 **To cut a new base image:** GitHub Actions builds two flash images on every `v*` tag (and via workflow_dispatch):
 
-- `adspace-tv-vX.Y.Z.img.xz` — **prod**: kiosk `https://screen.adspace.so`, no apt proxy
-- `adspace-tv-vX.Y.Z-dev.img.xz` — **dev**: kiosk `https://dev.adspace.live`, apt-cacher `http://192.168.10.106:3142`
+- `adspace-tv-vX.Y.Z.img.xz` — **prod**: kiosk `https://screen.adspace.so`, no apt proxy, hostname `adspace-{serial}`, Headscale key `HS_PROD_KEY`
+- `adspace-tv-vX.Y.Z-dev.img.xz` — **dev**: kiosk `https://dev.adspace.live`, apt-cacher `http://192.168.10.106:3142`, hostname `dev-adspace-{serial}`, Headscale key `HS_LAB_KEY`
 
 Download from the GitHub Release and flash with Raspberry Pi Imager — no customisation.
 
@@ -36,9 +36,9 @@ Locally (macOS or Linux):
 ```bash
 ./embed.sh ~/Downloads/2026-06-18-raspios-trixie-arm64-lite.img images/adspace-tv-v0.1.9.img
 ```
-The official Lite image URL + SHA-256 are pinned in `.github/workflows/release.yml`. Bump both when Raspberry Pi publishes a new Lite image. CI sources `.env.example` during embed, so flash images join Headscale (`HEADSCALE_LOGIN_SERVER` / `HEADSCALE_AUTH_KEY`) instead of Tailscale.com.
+The official Lite image URL + SHA-256 are pinned in `.github/workflows/release.yml`. Bump both when Raspberry Pi publishes a new Lite image. CI sources `.env.example` during embed (Headscale login server, Beszel hub), then overrides `HEADSCALE_AUTH_KEY` from GitHub secrets `HS_PROD_KEY` / `HS_LAB_KEY`. The **dev** image also bakes `HOSTNAME_PREFIX=dev-`.
 
-Optional: set `APT_PROXY=http://host:3142` and/or `ADSPACE_URL=https://dev.adspace.live` in `.env` so local `embed.sh` / `qemu-run.sh` images pick them up. Bootstrap writes `/etc/apt/apt.conf.d/01adspace-proxy` if the proxy is reachable; otherwise apt goes direct. The CI **dev** image bakes both in; the prod image does not.
+Optional: set `APT_PROXY=http://host:3142`, `ADSPACE_URL=https://dev.adspace.live`, and/or `HOSTNAME_PREFIX=dev-` in `.env` so local `embed.sh` / `qemu-run.sh` images pick them up. Bootstrap writes `/etc/apt/apt.conf.d/01adspace-proxy` if the proxy is reachable; otherwise apt goes direct. The CI **dev** image bakes all three in; the prod image does not.
 
 Optional: set `BESZEL_HUB_URL`, `BESZEL_KEY`, and `BESZEL_TOKEN` in `.env` (universal token from the Beszel hub) so images enroll the agent at bootstrap. Existing Pis: `make deploy-beszel PI_SSH=pi@adspace-{serial}`.
 
@@ -49,10 +49,11 @@ Optional: set `BESZEL_HUB_URL`, `BESZEL_KEY`, and `BESZEL_TOKEN` in `.env` (univ
 ## SSH access
 
 ### Pi naming
-Each Pi's hostname follows the pattern `adspace-{cpu_serial}` — set by `bootstrap.sh` on first boot from the hardware CPU serial. After a device is installed at a venue it can be renamed with `rename-device.sh`:
+Each Pi's hostname follows the pattern `{prefix}adspace-{cpu_serial}` — set by `bootstrap.sh` on first boot from the hardware CPU serial. The CI **dev** image bakes `HOSTNAME_PREFIX=dev-`. After a device is installed at a venue it can be renamed with `rename-device.sh`:
 
 ```
-adspace-{cpu_serial}          default, e.g. adspace-4d919699
+adspace-{cpu_serial}          prod default, e.g. adspace-4d919699
+dev-adspace-{cpu_serial}      dev image, e.g. dev-adspace-4d919699
 adspace-dubai-mall-01         after venue rename
 adspace-riyadh-airport-02
 ```
@@ -68,14 +69,14 @@ SSH to Pis goes through **Tailscale** — no keys to manage. See the README onbo
 
 1. Sign into Tailscale at [tailscale.com](https://tailscale.com) using **dev@adspace.so** (Continue with Google)
 2. Install the Tailscale Mac app
-3. SSH directly by device name: `ssh pi@adspace-{serial}`
+3. SSH directly by device name: `ssh pi@adspace-{serial}` (dev image: `ssh pi@dev-adspace-{serial}`)
 
 **Tailscale handles auth** — if you're logged into the AdSpace Tailscale account you can SSH any Pi, no key file needed.
 
 **SSH config** (add to `~/.ssh/config` for convenience):
 ```
 # AdSpace Pis via Tailscale — no key needed, Tailscale handles auth
-Host adspace-*
+Host adspace-* dev-adspace-*
     User pi
     StrictHostKeyChecking no
     UserKnownHostsFile /dev/null
@@ -147,7 +148,7 @@ make deploy-info PI_SSH=pi@adspace-{serial}
 make deploy-beszel PI_SSH=pi@adspace-{serial}
 ```
 
-The agent connects **out** to the hub (`HUB_URL` + universal `TOKEN`). `DISABLE_SSH=true` and `LISTEN=127.0.0.1:45876` so nothing inbound is exposed. `SYSTEM_NAME` is the hostname (`adspace-{serial}`, or the venue name after `rename-device.sh`).
+The agent connects **out** to the hub (`HUB_URL` + universal `TOKEN`). `DISABLE_SSH=true` and `LISTEN=127.0.0.1:45876` so nothing inbound is exposed. `SYSTEM_NAME` is the hostname (`adspace-{serial}`, `dev-adspace-{serial}` on the dev image, or the venue name after `rename-device.sh`).
 
 ### Releasing a new version (frontend + API + flash image)
 Commit on `main` with first line exactly `v1.2.3`. Anything after that becomes the GitHub Release changelog (GitHub also appends auto-generated notes):
@@ -271,7 +272,7 @@ dtparam=hdmi_force_hotplug=1
 9. Writes `/etc/caddy/Caddyfile`
 10. Installs all systemd units: `adspace-kiosk`, `adspace-watchdog`, `adspace-setup-api`, `adspace-info` (enabled at boot)
 11. Disables cloud-init
-12. Sets hostname from CPU serial
+12. Sets hostname from CPU serial (`dev-adspace-{serial}` when `HOSTNAME_PREFIX=dev-` is baked)
 13. Sets WiFi country (AE), unblocks rfkill
 14. Creates hotspot nmcli profile
 15. Installs Tailscale via the bundled `/opt/adspace/tailscale-install.sh` (vendored official installer; falls back to curl if missing) and registers the device
@@ -322,6 +323,8 @@ ssh pi@adspace-{serial} "sudo /opt/adspace/bootstrap.sh"
 | `/tmp/adspace-wifi-scan.json` | WiFi scan cache from before hotspot started |
 | `/boot/firmware/adspace-apt.env` | Optional `APT_PROXY=` — baked into the CI **dev** image, not prod |
 | `/boot/firmware/adspace-kiosk.env` | Optional `ADSPACE_URL=` — baked into the CI **dev** image (`https://dev.adspace.live`) |
+| `/boot/firmware/adspace-hostname.env` | Optional `HOSTNAME_PREFIX=dev-` — baked into the CI **dev** image; hostname becomes `dev-adspace-{serial}` |
+| `/boot/firmware/adspace-tailnet.env` | `HEADSCALE_LOGIN_SERVER` / `HEADSCALE_AUTH_KEY` — CI uses `HS_PROD_KEY` (prod image) or `HS_LAB_KEY` (dev image) |
 | `/boot/firmware/adspace-version.env` | `ADSPACE_VERSION=` from the git tag — baked by `embed.sh` / CI; bootstrap restamps the UA with the GitHub release tag when it pulls artifacts |
 | `/boot/firmware/adspace-beszel.env` | Optional `BESZEL_HUB_URL` / `BESZEL_KEY` / `BESZEL_TOKEN` — baked by `embed.sh` when set in `.env` |
 

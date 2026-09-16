@@ -39,7 +39,8 @@
 #   cloud-init, SSH, apt, most of bootstrap.sh, Headscale/Tailscale (if
 #   bootstrap gets that far), Beszel agent (if BESZEL_* are set in .env).
 #   If HEADSCALE_LOGIN_SERVER is set in .env, the guest joins Headscale
-#   instead of Tailscale.com.
+#   instead of Tailscale.com. HOSTNAME_PREFIX=dev- (CI *dev* image, or
+#   set in .env) makes the guest hostname dev-adspace-{serial}.
 #
 # WHAT THIS CANNOT TEST:
 #   cage / Chromium / HDMI, wlan0 hotspot, WiFi client. Bootstrap may abort
@@ -409,6 +410,14 @@ EOF
 ADSPACE_URL=${ADSPACE_URL}
 EOF
         log "Kiosk URL: guest will use ${ADSPACE_URL}"
+    fi
+    if [[ -n "${HOSTNAME_PREFIX:-}" ]]; then
+        [[ "$HOSTNAME_PREFIX" =~ ^[a-z0-9]+-$ ]] \
+            || die "Invalid HOSTNAME_PREFIX (want e.g. dev-): ${HOSTNAME_PREFIX}"
+        cat > "$QEMU_MNT/adspace-hostname.env" << EOF
+HOSTNAME_PREFIX=${HOSTNAME_PREFIX}
+EOF
+        log "Hostname prefix: guest will use ${HOSTNAME_PREFIX}"
     fi
     if [[ -z "${ADSPACE_VERSION:-}" ]]; then
         ADSPACE_VERSION=$(git -C "$REPO_DIR" describe --tags --always 2>/dev/null || true)

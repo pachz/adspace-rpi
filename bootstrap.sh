@@ -8,7 +8,7 @@
 #   - Writes all scripts, systemd units, and config files
 #   - Starts adspace-info (localhost:7224 device identity API)
 #   - Pulls the app binary + frontend from the latest GitHub Release
-#   - Sets hostname from CPU serial
+#   - Sets hostname from CPU serial (optional HOSTNAME_PREFIX, e.g. dev-)
 #   - Registers with Tailscale (or Headscale if HEADSCALE_LOGIN_SERVER is set)
 #   - Installs Beszel agent if BESZEL_HUB_URL / KEY / TOKEN are set
 #   - Reboots into kiosk mode
@@ -78,6 +78,16 @@ BESZEL_HUB_URL="${BESZEL_HUB_URL:-}"
 BESZEL_KEY="${BESZEL_KEY:-}"
 BESZEL_TOKEN="${BESZEL_TOKEN:-}"
 for _f in /boot/firmware/adspace-beszel.env /boot/adspace-beszel.env; do
+    [[ -f "$_f" ]] || continue
+    # shellcheck disable=SC1090
+    source "$_f"
+    break
+done
+
+# Optional hostname prefix (embed.sh writes this from HOSTNAME_PREFIX).
+# The CI *dev* image sets dev- so lab Pis appear as dev-adspace-{serial}.
+HOSTNAME_PREFIX="${HOSTNAME_PREFIX:-}"
+for _f in /boot/firmware/adspace-hostname.env /boot/adspace-hostname.env; do
     [[ -f "$_f" ]] || continue
     # shellcheck disable=SC1090
     source "$_f"
@@ -1751,9 +1761,13 @@ done
 
 # ── 12. Hostname from CPU serial ──────────────────────────────────────────────
 log "Setting hostname..."
+if [[ -n "$HOSTNAME_PREFIX" ]]; then
+    [[ "$HOSTNAME_PREFIX" =~ ^[a-z0-9]+-$ ]] \
+        || die "Invalid HOSTNAME_PREFIX (want e.g. dev-): $(printf %q "$HOSTNAME_PREFIX")"
+fi
 CPU_SERIAL=$(device_serial)
-NEW_HOSTNAME="adspace-${CPU_SERIAL}"
-[[ "$NEW_HOSTNAME" =~ ^adspace-[0-9a-fA-F]+$ ]] \
+NEW_HOSTNAME="${HOSTNAME_PREFIX}adspace-${CPU_SERIAL}"
+[[ "$NEW_HOSTNAME" =~ ^([a-z0-9]+-)?adspace-[0-9a-fA-F]+$ ]] \
     || die "Invalid hostname derived from serial: $(printf %q "$NEW_HOSTNAME")"
 echo "$NEW_HOSTNAME" > /etc/hostname
 hostnamectl set-hostname "$NEW_HOSTNAME" || hostname "$NEW_HOSTNAME"

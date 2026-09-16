@@ -194,6 +194,8 @@ jobs:
           DEV_APT_PROXY: http://192.168.10.106:3142
           DEV_ADSPACE_URL: https://dev.adspace.live
           ADSPACE_VERSION: ${{ steps.meta.outputs.release_tag }}
+          HS_PROD_KEY: ${{ secrets.HS_PROD_KEY }}
+          HS_LAB_KEY: ${{ secrets.HS_LAB_KEY }}
         run: |
           mkdir -p images
           xz -T0 -dkc raspios.img.xz > images/pristine.img
@@ -207,22 +209,29 @@ jobs:
             ls -lh "${out}.xz"
           }
 
+          [[ -n "$HS_PROD_KEY" ]] || { echo "HS_PROD_KEY secret is empty" >&2; exit 1; }
+          [[ -n "$HS_LAB_KEY" ]] || { echo "HS_LAB_KEY secret is empty" >&2; exit 1; }
+
           set -a
           # shellcheck disable=SC1091
           source .env.example
           set +a
-          unset APT_PROXY ADSPACE_URL
+          unset APT_PROXY ADSPACE_URL HOSTNAME_PREFIX HEADSCALE_AUTH_KEY
           if [[ -z "${ADSPACE_VERSION:-}" ]]; then
             ADSPACE_VERSION="${IMG_NAME#adspace-tv-}"
           fi
           export ADSPACE_VERSION
           echo "Image version for Chromium UA: ${ADSPACE_VERSION}"
+
+          export HEADSCALE_AUTH_KEY="$HS_PROD_KEY"
           echo "Embedding prod (kiosk https://screen.adspace.so, no apt proxy)"
           embed_flavor "images/${IMG_NAME}.img"
 
+          export HEADSCALE_AUTH_KEY="$HS_LAB_KEY"
           export APT_PROXY="$DEV_APT_PROXY"
           export ADSPACE_URL="$DEV_ADSPACE_URL"
-          echo "Embedding dev (kiosk ${ADSPACE_URL}, apt proxy ${APT_PROXY})"
+          export HOSTNAME_PREFIX=dev-
+          echo "Embedding dev (kiosk ${ADSPACE_URL}, apt proxy ${APT_PROXY}, hostname ${HOSTNAME_PREFIX}adspace-{serial})"
           embed_flavor "images/${IMG_NAME}-dev.img"
 
           rm -f images/pristine.img

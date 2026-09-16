@@ -184,8 +184,8 @@ rpi/
 
 **Preferred:** download from the [latest GitHub Release](https://github.com/pachz/adspace-rpi/releases/latest). Raspberry Pi Imager opens `.xz` directly.
 
-- `adspace-tv-vX.Y.Z.img.xz` — **prod**: kiosk `https://screen.adspace.so`
-- `adspace-tv-vX.Y.Z-dev.img.xz` — **dev**: kiosk `https://dev.adspace.live`, office apt-cacher
+- `adspace-tv-vX.Y.Z.img.xz` — **prod**: kiosk `https://screen.adspace.so`, hostname `adspace-{serial}`
+- `adspace-tv-vX.Y.Z-dev.img.xz` — **dev**: kiosk `https://dev.adspace.live`, office apt-cacher, hostname `dev-adspace-{serial}`
 
 **Or build locally** (macOS or Linux) from a vanilla **Raspberry Pi OS Lite 64-bit (Trixie)** `.img`:
 ```bash
@@ -223,8 +223,8 @@ sudo journalctl -u adspace-bootstrap -f
 
 ### Step 4 — Verify
 Once bootstrap completes and the Pi reboots:
-- Pi appears in [Tailscale dashboard](https://login.tailscale.com/admin/machines) as `adspace-{serial}` with tag `tag:rpi`
-- SSH from anywhere: `ssh pi@adspace-{serial}`
+- Pi appears in [Tailscale dashboard](https://login.tailscale.com/admin/machines) as `adspace-{serial}` (dev image: `dev-adspace-{serial}`)
+- SSH from anywhere: `ssh pi@adspace-{serial}` (dev image: `ssh pi@dev-adspace-{serial}`)
 - With ethernet: TV shows `screen.adspace.so`
 - Without ethernet: setup screen appears, hotspot `Adspace-TV-{serial}` is visible
 
@@ -316,6 +316,7 @@ This publishes `wifi-setup-api` (arm64 binary), `wifi-setup-dist.tar.gz`, `adspa
 ### SSH via Tailscale (normal)
 ```bash
 ssh pi@adspace-{serial}           # e.g. ssh pi@adspace-4d919699
+ssh pi@dev-adspace-{serial}       # CI *dev* image
 ssh pi@adspace-dubai-mall-01      # after venue rename
 ```
 
@@ -323,7 +324,7 @@ No key file needed — Tailscale handles auth. Just be signed into the AdSpace T
 
 Add to `~/.ssh/config` for convenience:
 ```
-Host adspace-*
+Host adspace-* dev-adspace-*
     User pi
     StrictHostKeyChecking no
     UserKnownHostsFile /dev/null
@@ -432,7 +433,7 @@ ssh pi@adspace-{serial} "sudo /opt/adspace/bootstrap.sh"
 - [ ] Phone connects to hotspot → opens `http://192.168.4.1` → WiFi form with network dropdown
 - [ ] Submit valid WiFi creds → TV transitions to kiosk within 15s
 - [ ] `make logs` shows clean watchdog transitions
-- [ ] If Beszel creds were set: Pi appears in the hub as `adspace-{serial}`
+- [ ] If Beszel creds were set: Pi appears in the hub as `adspace-{serial}` (dev image: `dev-adspace-{serial}`)
 
 ---
 
@@ -440,7 +441,8 @@ ssh pi@adspace-{serial} "sudo /opt/adspace/bootstrap.sh"
 
 Each Pi gets a hostname based on its CPU serial number during bootstrap:
 ```
-adspace-{8-char cpu serial}    e.g. adspace-4d919699
+adspace-{8-char cpu serial}        prod, e.g. adspace-4d919699
+dev-adspace-{8-char cpu serial}    CI *dev* image
 ```
 
 This is **hardware-burned and unique per board** — safe across all Pis (unlike `/etc/machine-id` which can be cloned identically).
