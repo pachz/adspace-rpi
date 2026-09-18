@@ -11,6 +11,12 @@ if [ -s /opt/adspace/chromium-ua ]; then
     UA_ARGS=(--user-agent="$(tr -d '\n\r' < /opt/adspace/chromium-ua)")
 fi
 
+# Per-site HDMI mode (LED walls). No-op unless /opt/adspace/display.env exists.
+# Background: Chromium can start immediately; wlr-randr waits for the socket.
+if [ -s /opt/adspace/display.env ] && [ -x /opt/adspace/set-display-mode.sh ]; then
+    /opt/adspace/set-display-mode.sh &
+fi
+
 if [ -f /tmp/adspace-setup-mode ]; then
     # Wait for Caddy to be ready before launching browser
     for i in $(seq 1 10); do

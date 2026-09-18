@@ -5,9 +5,9 @@
 # Always-on HTTP API with this Pi's version and hardware identity.
 # Bound to 127.0.0.1 only. CPU serial is the unique id (not machine-id).
 #
-# Also installed to /opt/adspace/device-info.py by bootstrap.sh — keep both in sync.
+# Packaged into adspace-host.tar.gz; bootstrap unpacks it to /opt/adspace.
 #
-#   GET  /            device info (identity + health)
+#   GET  /            device info (identity + display + health)
 #   GET  /api/info    same payload
 #   GET  /health      {"ok": true, "health": {...}}
 #   POST /api/command signed command packet (Ed25519)
@@ -47,6 +47,7 @@ LISTEN_HOST = "127.0.0.1"
 LISTEN_PORT = 7224
 VERSION_PATH = "/opt/adspace/version"
 SETUP_FLAG = "/tmp/adspace-setup-mode"
+DISPLAY_ENV_PATH = "/opt/adspace/display.env"
 PUBKEY_PATH = "/opt/adspace/command-pubkey"
 NONCE_PATH = "/tmp/adspace-command-nonces.json"
 INDICATE_PATH = "/opt/adspace/indicate.sh"
@@ -59,6 +60,12 @@ MAX_BODY = 16384
 NONCE_RE = re.compile(r"^[0-9a-fA-F]{16,128}$")
 COMMAND_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 HEX_RE = re.compile(r"^[0-9a-fA-F]+$")
+ENV_LINE_RE = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
+RES_RE = re.compile(r"^(\d+)x(\d+)$")
+WLR_MODE_RE = re.compile(
+    r"^\s+(\d+)x(\d+)\s+px,\s+([0-9.]+)\s+Hz(?:\s+\(([^)]*)\))?"
+)
+DRM_CONN_RE = re.compile(r"^card\d+-(.+)$")
 
 _nonce_lock = threading.Lock()
 
@@ -340,6 +347,245 @@ def throttle_stats():
         return None
 
 
+def _parse_env_file(text):
+    values = {}
+    for raw in text.splitlines():
+        line = raw.strip().lstrip("\ufeff")
+        if not line or line.startswith("#"):
+            continue
+        match = ENV_LINE_RE.match(line)
+        if not match:
+            continue
+        key, val = match.group(1), match.group(2).strip()
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+            val = val[1:-1]
+        values[key] = val.strip().strip("\r")
+    return values
+
+
+def _mode_obj(width, height, refresh_hz=None):
+    return {
+        "mode": f"{int(width)}x{int(height)}",
+        "width": int(width),
+        "height": int(height),
+        "refreshHz": _round(refresh_hz, 3) if refresh_hz is not None else None,
+    }
+
+
+def display_configured(path=DISPLAY_ENV_PATH):
+    """Preferred mode from /opt/adspace/display.env, or None if unset."""
+    text = _read_text(path)
+    if not text:
+        return None
+    values = _parse_env_file(text)
+    raw_mode = values.get("DISPLAY_MODE") or ""
+    match = RES_RE.match(raw_mode)
+    if not match:
+        return None
+    width, height = int(match.group(1)), int(match.group(2))
+    rate = None
+    raw_rate = values.get("DISPLAY_RATE") or ""
+    if raw_rate:
+        try:
+            rate = float(raw_rate)
+        except ValueError:
+            rate = None
+    output = values.get("DISPLAY_OUTPUT") or None
+    if output == "":
+        output = None
+    return _mode_obj(width, height, rate) | {"output": output}
+
+
+def parse_wlr_randr(text):
+    """Parse `wlr-randr` text into output dicts (current / preferred / modes)."""
+    outputs = []
+    current = None
+    in_modes = False
+    for line in text.splitlines():
+        if line and not line[0].isspace():
+            name = line.split()[0]
+            current = {
+                "name": name,
+                "connected": True,
+                "enabled": None,
+                "make": None,
+                "model": None,
+                "current": None,
+                "preferred": None,
+                "overridden": False,
+                "modes": [],
+            }
+            outputs.append(current)
+            in_modes = False
+            continue
+        if current is None:
+            continue
+        stripped = line.strip()
+        if stripped.startswith("Enabled:"):
+            current["enabled"] = stripped.split(":", 1)[-1].strip() == "yes"
+            in_modes = False
+        elif stripped.startswith("Make:"):
+            make = stripped.split(":", 1)[-1].strip()
+            current["make"] = make or None
+        elif stripped.startswith("Model:"):
+            model = stripped.split(":", 1)[-1].strip()
+            current["model"] = model or None
+        elif stripped.startswith("Modes:"):
+            in_modes = True
+        elif in_modes:
+            match = WLR_MODE_RE.match(line)
+            if not match:
+                in_modes = False
+                continue
+            width, height, hz = int(match.group(1)), int(match.group(2)), float(match.group(3))
+            flags = match.group(4) or ""
+            mode = _mode_obj(width, height, hz)
+            is_current = "current" in flags
+            is_preferred = "preferred" in flags
+            current["modes"].append({
+                **mode,
+                "current": is_current,
+                "preferred": is_preferred,
+            })
+            if is_current:
+                current["current"] = mode
+            if is_preferred:
+                current["preferred"] = mode
+    return outputs
+
+
+def _wayland_env():
+    uid = os.getuid()
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{uid}"
+    display = os.environ.get("WAYLAND_DISPLAY") or "wayland-0"
+    env = os.environ.copy()
+    env["XDG_RUNTIME_DIR"] = runtime
+    env["WAYLAND_DISPLAY"] = display
+    return env, os.path.join(runtime, display)
+
+
+def _wlr_randr_text():
+    env, socket_path = _wayland_env()
+    if not os.path.exists(socket_path):
+        return None
+    try:
+        result = subprocess.run(
+            ["wlr-randr"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            env=env,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0 or not (result.stdout or "").strip():
+        return None
+    return result.stdout
+
+
+def _drm_outputs():
+    """Connected DRM connectors when Cage/wlr-randr is not available."""
+    outputs = []
+    for path in sorted(glob.glob("/sys/class/drm/card*-*-*")):
+        base = os.path.basename(path)
+        match = DRM_CONN_RE.match(base)
+        if not match:
+            continue
+        status = (_read_text(os.path.join(path, "status")) or "").strip()
+        if status != "connected":
+            continue
+        enabled_text = (_read_text(os.path.join(path, "enabled")) or "").strip()
+        modes = []
+        for line in (_read_text(os.path.join(path, "modes")) or "").splitlines():
+            res = RES_RE.match(line.strip())
+            if not res:
+                continue
+            mode = _mode_obj(int(res.group(1)), int(res.group(2)))
+            modes.append({**mode, "current": False, "preferred": False})
+        live = None
+        live_text = (_read_text(os.path.join(path, "mode")) or "").strip()
+        live_match = RES_RE.match(live_text.split()[0]) if live_text else None
+        if live_match:
+            live = _mode_obj(int(live_match.group(1)), int(live_match.group(2)))
+            for item in modes:
+                if item["mode"] == live["mode"]:
+                    item["current"] = True
+                    break
+            else:
+                modes.insert(0, {**live, "current": True, "preferred": False})
+        outputs.append({
+            "name": match.group(1),
+            "connected": True,
+            "enabled": enabled_text == "enabled",
+            "make": None,
+            "model": None,
+            "current": live,
+            "preferred": None,
+            "overridden": False,
+            "modes": modes,
+        })
+    return outputs
+
+
+def _mode_matches(live, configured):
+    if not live or not configured:
+        return False
+    if live["width"] != configured["width"] or live["height"] != configured["height"]:
+        return False
+    want = configured.get("refreshHz")
+    if want is None:
+        return True
+    have = live.get("refreshHz")
+    if have is None:
+        return True
+    return abs(have - want) < 0.02
+
+
+def _is_target_output(output, configured):
+    if not configured or not configured.get("output"):
+        return True
+    return output.get("name") == configured["output"]
+
+
+def display_status():
+    """HDMI outputs, live mode, EDID preferred, and site override from display.env."""
+    configured = display_configured()
+    text = _wlr_randr_text()
+    if text:
+        outputs = parse_wlr_randr(text)
+        source = "wlr-randr"
+    else:
+        outputs = _drm_outputs()
+        source = "drm" if outputs else None
+
+    applied = False
+    for output in outputs:
+        current = output.get("current")
+        preferred = output.get("preferred")
+        matches = bool(
+            configured
+            and _is_target_output(output, configured)
+            and _mode_matches(current, configured)
+        )
+        if matches:
+            applied = True
+        if current and preferred:
+            differs = (
+                current["width"] != preferred["width"]
+                or current["height"] != preferred["height"]
+            )
+        else:
+            differs = matches
+        output["overridden"] = matches and differs
+
+    return {
+        "configured": configured,
+        "applied": applied,
+        "source": source,
+        "outputs": outputs,
+    }
+
+
 def health():
     load1, load5, load15 = loadavg()
     mem = meminfo_bytes()
@@ -368,6 +614,7 @@ def info():
         "hostname": socket.gethostname(),
         "model": model(),
         "mode": "setup" if os.path.exists(SETUP_FLAG) else "kiosk",
+        "display": display_status(),
         "health": health(),
     }
 

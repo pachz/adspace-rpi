@@ -2,9 +2,9 @@
 # =============================================================================
 # AdSpace RPi — Embed Script
 # =============================================================================
-# Injects bootstrap.sh, adspace-bootstrap.service, and the vendored
-# Tailscale installer into a vanilla
-# Raspberry Pi OS Lite 64-bit .img file so it self-provisions on first boot.
+# Injects bootstrap.sh, adspace-bootstrap.service, the vendored Tailscale
+# installer, and adspace-host.tar.gz into a vanilla Raspberry Pi OS Lite
+# 64-bit .img file so it self-provisions on first boot.
 #
 # USAGE:
 #   ./embed.sh <path-to-rpios-lite.img> [output.img]
@@ -27,6 +27,8 @@
 #     - Runs bootstrap.sh on first boot via runcmd
 #
 #   All files also placed on the boot partition so cloud-init can reference them.
+#   pack-host.sh writes adspace-host.tar.gz there; bootstrap unpacks it into
+#   /opt/adspace (watchdog, start-display, set-display-mode, indicate, device-info, hide-cursor).
 #
 #   Optional: HEADSCALE_LOGIN_SERVER + HEADSCALE_AUTH_KEY (env or .env)
 #   write adspace-tailnet.env onto the boot partition so bootstrap joins
@@ -53,6 +55,10 @@
 #   Optional: BESZEL_HUB_URL + BESZEL_KEY + BESZEL_TOKEN (env or .env)
 #   write adspace-beszel.env onto the boot partition so bootstrap installs
 #   the Beszel agent and registers the Pi with the hub (universal token).
+#
+#   Optional: DISPLAY_MODE (+ DISPLAY_OUTPUT) write adspace-display.env so
+#   bootstrap copies a site-preferred HDMI mode. Do not set this on fleet
+#   images — only when cutting a card for a known LED wall (e.g. Oxygen).
 # =============================================================================
 
 set -euo pipefail
@@ -88,6 +94,8 @@ OUTPUT_IMG="${2:-${REPO_DIR}/images/adspace-tv.img}"
     || die "tailscale-install.sh not found in repo root"
 [[ -f "$REPO_DIR/install-beszel.sh" ]] \
     || die "install-beszel.sh not found in repo root"
+[[ -f "$REPO_DIR/pack-host.sh" ]] \
+    || die "pack-host.sh not found in repo root"
 [[ "$OS" == "Darwin" || "$OS" == "Linux" ]] \
     || die "Unsupported OS: $OS (need macOS or Linux)"
 
@@ -394,8 +402,26 @@ if [[ -n "${BESZEL_HUB_URL:-}" || -n "${BESZEL_KEY:-}" || -n "${BESZEL_TOKEN:-}"
     log "Beszel: image will register with ${BESZEL_HUB_URL}"
 fi
 
+if [[ -n "${DISPLAY_MODE:-}" ]]; then
+    [[ "$DISPLAY_MODE" =~ ^[0-9]+x[0-9]+$ ]] \
+        || die "Invalid DISPLAY_MODE (want e.g. 1920x960): ${DISPLAY_MODE}"
+    if [[ -n "${DISPLAY_OUTPUT:-}" ]]; then
+        [[ "$DISPLAY_OUTPUT" =~ ^[A-Za-z0-9-]+$ ]] \
+            || die "Invalid DISPLAY_OUTPUT: ${DISPLAY_OUTPUT}"
+    fi
+    {
+        printf 'DISPLAY_MODE=%s\n' "$DISPLAY_MODE"
+        [[ -n "${DISPLAY_OUTPUT:-}" ]] && printf 'DISPLAY_OUTPUT=%s\n' "$DISPLAY_OUTPUT"
+        [[ -n "${DISPLAY_RATE:-}" ]] && printf 'DISPLAY_RATE=%s\n' "$DISPLAY_RATE"
+    } > "$MOUNT_DIR/adspace-display.env"
+    log "Display mode: ${DISPLAY_MODE}${DISPLAY_OUTPUT:+ on ${DISPLAY_OUTPUT}}"
+fi
+
+bash "$REPO_DIR/pack-host.sh" "$MOUNT_DIR/adspace-host.tar.gz"
+
 log "Boot partition key files:"
 ls -lh "$MOUNT_DIR/user-data" "$MOUNT_DIR/meta-data" \
+    "$MOUNT_DIR/adspace-host.tar.gz" \
     "$MOUNT_DIR/adspace-tailnet.env" "$MOUNT_DIR/adspace-apt.env" \
     "$MOUNT_DIR/adspace-kiosk.env" "$MOUNT_DIR/adspace-hostname.env" \
     "$MOUNT_DIR/adspace-version.env" "$MOUNT_DIR/adspace-beszel.env" \

@@ -388,6 +388,8 @@ elif j >= 0:
 else:
     print("user-data has no Enable SSH marker — skip install-beszel.sh")
 PY
+    bash "${REPO_DIR}/pack-host.sh" "$QEMU_MNT/adspace-host.tar.gz"
+    log "Host bundle: adspace-host.tar.gz"
     if [[ -n "${HEADSCALE_LOGIN_SERVER:-}" ]]; then
         [[ -n "${HEADSCALE_AUTH_KEY:-}" ]] \
             || die "HEADSCALE_LOGIN_SERVER is set but HEADSCALE_AUTH_KEY is empty"
@@ -439,6 +441,16 @@ EOF
             printf 'BESZEL_TOKEN="%s"\n' "${BESZEL_TOKEN//\"/\\\"}"
         } > "$QEMU_MNT/adspace-beszel.env"
         log "Beszel: guest will register with ${BESZEL_HUB_URL}"
+    fi
+    if [[ -n "${DISPLAY_MODE:-}" ]]; then
+        [[ "$DISPLAY_MODE" =~ ^[0-9]+x[0-9]+$ ]] \
+            || die "Invalid DISPLAY_MODE (want e.g. 1920x960): ${DISPLAY_MODE}"
+        {
+            printf 'DISPLAY_MODE=%s\n' "$DISPLAY_MODE"
+            [[ -n "${DISPLAY_OUTPUT:-}" ]] && printf 'DISPLAY_OUTPUT=%s\n' "$DISPLAY_OUTPUT"
+            [[ -n "${DISPLAY_RATE:-}" ]] && printf 'DISPLAY_RATE=%s\n' "$DISPLAY_RATE"
+        } > "$QEMU_MNT/adspace-display.env"
+        log "Display mode: guest will prefer ${DISPLAY_MODE}${DISPLAY_OUTPUT:+ on ${DISPLAY_OUTPUT}}"
     fi
     cleanup_boot
     trap - EXIT

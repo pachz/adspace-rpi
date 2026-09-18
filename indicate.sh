@@ -6,7 +6,7 @@
 # HDMI screen (kiosk GUI or a console) flashes the hostname for a few seconds.
 # Cage stays running — we switch to a spare VT and switch back.
 #
-# Also installed to /opt/adspace/indicate.sh by bootstrap.sh — keep both in sync.
+# Packaged into adspace-host.tar.gz; bootstrap unpacks it to /opt/adspace.
 #
 # Usage:
 #   sudo /opt/adspace/indicate.sh

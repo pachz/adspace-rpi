@@ -2,6 +2,7 @@
 #
 # ── Image prep (prefer the GitHub Release .img.xz; this is the local path) ───
 #   make embed IMG=~/Downloads/rpios-lite.img
+#   ./pack-host.sh [outfile]     — pack host scripts (also run by embed / qemu / CI)
 #
 # ── QEMU (Mac, no SD card) ───────────────────────────────────────────────────
 #   make qemu                    — boot the embedded image (Ctrl-A X to quit)
@@ -21,6 +22,8 @@
 #   make logs PI_SSH=pi@adspace-{serial}
 #   make screenshot PI_SSH=pi@adspace-{serial}
 #   make indicate PI_SSH=pi@adspace-{serial}   — blink ACT LED + flash hostname on the TV
+#   make display-mode PI_SSH=pi@adspace-{serial} MODE=1920x960 [OUTPUT=HDMI-A-2]
+#   make display-mode PI_SSH=pi@adspace-{serial} CLEAR=1
 #   make ssh PI_SSH=pi@adspace-{serial}
 
 PI_SSH ?= $(error PI_SSH is required. Usage: make deploy PI_SSH=pi@adspace-{serial})
@@ -30,7 +33,11 @@ SSH  = ssh $(PI_SSH)
 SCP  = scp
 QEMU_IMG ?=
 
-.PHONY: embed deploy deploy-front deploy-api deploy-info deploy-beszel logs screenshot indicate ssh qemu qemu-gui
+MODE ?=
+OUTPUT ?=
+CLEAR ?=
+
+.PHONY: embed deploy deploy-front deploy-api deploy-info deploy-beszel logs screenshot indicate display-mode ssh qemu qemu-gui
 
 # ── Image prep ────────────────────────────────────────────────────────────────
 embed:
@@ -122,6 +129,31 @@ screenshot:
 
 indicate:
 	$(SSH) "sudo bash -s" < indicate.sh
+
+# Per-device HDMI mode (LED walls). No-op on Pis without display.env.
+# Example (Oxygen / Kramer 2:1 canvas):
+#   make display-mode PI_SSH=pi@adspace-{serial} MODE=1920x960 OUTPUT=HDMI-A-2
+display-mode:
+ifeq ($(CLEAR),1)
+	$(SSH) "sudo rm -f /opt/adspace/display.env && sudo systemctl restart adspace-kiosk.service"
+	@echo "Cleared display.env and restarted kiosk (EDID preferred)"
+else
+	@echo "$(MODE)" | grep -Eq '^[0-9]+x[0-9]+$$' \
+		|| { echo "Usage: make display-mode PI_SSH=pi@adspace-{serial} MODE=1920x960 [OUTPUT=HDMI-A-2]"; exit 1; }
+	$(SCP) set-display-mode.sh start-display.sh $(PI_SSH):/tmp/
+	$(SSH) "sudo mv /tmp/set-display-mode.sh /opt/adspace/set-display-mode.sh \
+	     && sudo mv /tmp/start-display.sh /opt/adspace/start-display.sh \
+	     && sudo chown adspace:adspace /opt/adspace/set-display-mode.sh /opt/adspace/start-display.sh \
+	     && sudo chmod +x /opt/adspace/set-display-mode.sh /opt/adspace/start-display.sh \
+	     && (dpkg -s wlr-randr >/dev/null 2>&1 || sudo apt-get install -y wlr-randr) \
+	     && { echo DISPLAY_MODE=$(MODE); \
+	          $(if $(OUTPUT),echo DISPLAY_OUTPUT=$(OUTPUT);) \
+	        } | sudo tee /opt/adspace/display.env >/dev/null \
+	     && sudo chown adspace:adspace /opt/adspace/display.env \
+	     && sudo chmod 644 /opt/adspace/display.env \
+	     && sudo /opt/adspace/set-display-mode.sh"
+	@echo "Preferred mode $(MODE)$(if $(OUTPUT), on $(OUTPUT),) saved; reapplies on each kiosk start"
+endif
 
 ssh:
 	$(SSH)

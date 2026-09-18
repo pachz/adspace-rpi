@@ -1,4 +1,5 @@
 # Build artefacts
+adspace-host.tar.gz
 wifi-setup/dist/
 wifi-setup/node_modules/
 wifi-setup/.vite/
